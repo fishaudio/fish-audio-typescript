@@ -4,7 +4,7 @@
     "description": "To provide convenient Node.js program integration for https://docs.fish.audio",
     "repository": {
         "type": "git",
-        "url": "git+https://github.com/kcui5/fish-audio-typescript.git"
+        "url": "git+https://github.com/fishaudio/fish-audio-typescript.git"
     },
     "license": "MIT",
     "author": "",
@@ -44,7 +44,7 @@
         "tts"
     ],
     "bugs": {
-        "url": "https://github.com/kcui5/fish-audio-typescript/issues"
+        "url": "https://github.com/fishaudio/fish-audio-typescript/issues"
     },
-    "homepage": "https://github.com/kcui5/fish-audio-typescript#readme"
+    "homepage": "https://github.com/fishaudio/fish-audio-typescript#readme"
 }
