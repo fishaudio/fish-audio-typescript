@@ -1,6 +1,7 @@
 export * from "./resources/index.js";
 export * from "./errors/index.js";
 export type { ReferenceAudio, TTSRequest } from "./resources/textToSpeech/requests/TTSRequest.js";
+export type { Backends } from "./resources/textToSpeech/Client.js";
 export type { STTRequest } from "./resources/speechToText/requests/STTRequest.js";
 export type { STTResponse } from "./resources/speechToText/types/STTResponse.js";
 export type { ModelListRequest } from "./resources/voices/requests/ModelListRequest.js";

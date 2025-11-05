@@ -48,14 +48,14 @@ export class TextToSpeech {
      */
     public convert(
         request: TTSRequest,
-        model: Backends = "s1",
+        backend: Backends = "s1",
         requestOptions?: TextToSpeech.RequestOptions,
     ): core.HttpResponsePromise<ReadableStream<Uint8Array>> {
-        return core.HttpResponsePromise.fromPromise(this.__convert(model, request, requestOptions));
+        return core.HttpResponsePromise.fromPromise(this.__convert(backend, request, requestOptions));
     }
 
     private async __convert(
-        model: Backends,
+        backend: Backends,
         request: TTSRequest,
         requestOptions?: TextToSpeech.RequestOptions,
     ): Promise<core.WithRawResponse<ReadableStream<Uint8Array>>> {
@@ -70,7 +70,7 @@ export class TextToSpeech {
             this._options?.headers,
             mergeOnlyDefinedHeaders({
                 Authorization: _authHeader,
-                model: model,
+                model: backend,
             }),
             requestOptions?.headers,
         );

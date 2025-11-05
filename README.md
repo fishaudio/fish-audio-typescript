@@ -34,8 +34,8 @@ import { FishAudioClient, play } from fish-audio;
 
 const fishAudio = new FishAudioClient({ apiKey: "your_api_key" });
 
-const ttsRequest = { text: "Hello, world!" };
-const audio = await fishAudio.textToSpeech.convert(ttsRequest); //defaults to model = "s1"
+const request = { text: "Hello, world!" };
+const audio = await fishAudio.textToSpeech.convert(request); //defaults to backend: "s1"
 
 await play(audio);
 ```
@@ -45,7 +45,7 @@ await play(audio);
 ```typescript
 import type { TTSRequest } from fish-audio;
 
-const ttsRequest: TTSRequest = {
+const request: TTSRequest = {
     text: "Hello, world!",
     reference_id: "your_model_id",
 };
@@ -62,7 +62,7 @@ const referenceAudio: ReferenceAudio = {
     text: "reference audio text"
 };
 
-const ttsRequest: TTSRequest = {
+const request: TTSRequest = {
     text: "Hello, world!",
     references: [referenceAudio]
 };
@@ -98,6 +98,7 @@ const request = {
     reference_id: "your_model_id"
 };
 
+// Defaults to backend: "s1"
 const connection = await client.textToSpeech.convertRealtime(request, makeTextStream());
 
 // Collect audio and write to a file when the stream ends
@@ -187,7 +188,7 @@ fishAudio.voices.get("your_model_id")
 fishAudio.voices.update("your_model_id", { title: "new_title" })
 ```
 
-### Delete a model
+#### Delete a model
 
 ```typescript
 fishAudio.voices.delete("your_model_id")
