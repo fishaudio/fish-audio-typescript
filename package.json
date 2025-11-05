@@ -1,6 +1,6 @@
 {
     "name": "fish-audio",
-    "version": "0.0.2",
+    "version": "0.0.3",
     "description": "To provide convenient Node.js program integration for https://docs.fish.audio",
     "repository": {
         "type": "git",
