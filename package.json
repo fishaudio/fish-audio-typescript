@@ -1,6 +1,6 @@
 {
     "name": "fish-audio",
-    "version": "0.0.1",
+    "version": "0.0.2",
     "description": "To provide convenient Node.js program integration for https://docs.fish.audio",
     "repository": {
         "type": "git",
@@ -8,7 +8,6 @@
     },
     "license": "MIT",
     "author": "",
-
     "main": "./dist/cjs/index.js",
     "module": "./dist/esm/index.js",
     "types": "./dist/esm/index.d.ts",
@@ -25,7 +24,9 @@
         "build:esm": "tsc --project tsconfig.json --outDir dist/esm --moduleResolution bundler",
         "clean": "rm -rf dist"
     },
-    "files": ["dist"],
+    "files": [
+        "dist"
+    ],
     "type": "module",
     "devDependencies": {
         "@types/command-exists": "^1.2.3",
