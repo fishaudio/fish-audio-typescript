@@ -14,7 +14,7 @@ Initialize a `FishAudioClient` to use APIs. Authenticate by setting `FISH_API_KE
 in your environment or pass it in.
 
 ```typescript
-import { FishAudioClient } from fish-audio;
+import { FishAudioClient } from "fish-audio";
 
 const fishAudio = new FishAudioClient();
 ```
@@ -22,7 +22,7 @@ const fishAudio = new FishAudioClient();
 Sometimes, you may need to change our endpoint to another address. You can use
 
 ```typescript
-import { FishAudioClient } from fish-audio;
+import { FishAudioClient } from "fish-audio";
 
 const fishAudio = new FishAudioClient({apiKey: "your_api_key", baseUrl: "https://your-proxy-domain"});
 ```
@@ -30,7 +30,7 @@ const fishAudio = new FishAudioClient({apiKey: "your_api_key", baseUrl: "https:/
 ### Text to Speech
 
 ```typescript
-import { FishAudioClient, play } from fish-audio;
+import { FishAudioClient, play } from "fish-audio";
 
 const fishAudio = new FishAudioClient({ apiKey: "your_api_key" });
 
@@ -43,7 +43,7 @@ await play(audio);
 #### Reference Audio
 
 ```typescript
-import type { TTSRequest } from fish-audio;
+import type { TTSRequest } from "fish-audio";
 
 const request: TTSRequest = {
     text: "Hello, world!",
