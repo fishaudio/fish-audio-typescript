@@ -14,7 +14,7 @@ async function main() {
     const fishAudio = new FishAudioClient({ apiKey: apiKey });
 
     const ttsRequest1 = { text: "Hello, world!" };
-    const audio1 = await fishAudio.textToSpeech.convert(ttsRequest1); //defaults to model = "s1"
+    const audio1 = await fishAudio.textToSpeech.convert(ttsRequest1); //defaults to model = "s2"
 
     await play(audio1);
 
@@ -24,7 +24,7 @@ async function main() {
         text: "Hello, world!",
         reference_id: referenceId,
     };
-    const audio2 = await fishAudio.textToSpeech.convert(ttsRequest2); //defaults to model = "s1"
+    const audio2 = await fishAudio.textToSpeech.convert(ttsRequest2); //defaults to model = "s2"
 
     await play(audio2);
 

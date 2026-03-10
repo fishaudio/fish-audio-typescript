@@ -46,14 +46,14 @@ export class TextToSpeechWebSocket extends TextToSpeech {
      * const connection = await client.textToSpeech.convertRealtime({
      *     request: TTSRequest,
      *     text_stream: "...",
-     *     backend: "s1",
+     *     backend: "s2",
      * });
      * ```
      */
     public async convertRealtime(
         request: TTSRequest,
         textStream: Iterable<string> | AsyncIterable<string>,
-        backend: Backends = "s1",
+        backend: Backends = "s2",
     ): Promise<RealtimeConnection> {
         let apiKey = this._options.apiKey;
         if (!apiKey) {
