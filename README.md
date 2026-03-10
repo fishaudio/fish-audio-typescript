@@ -35,7 +35,7 @@ import { FishAudioClient, play } from "fish-audio";
 const fishAudio = new FishAudioClient({ apiKey: "your_api_key" });
 
 const request = { text: "Hello, world!" };
-const audio = await fishAudio.textToSpeech.convert(request); //defaults to backend: "s2"
+const audio = await fishAudio.textToSpeech.convert(request); //defaults to backend: "s2-pro"
 
 await play(audio);
 ```
@@ -98,7 +98,7 @@ const request = {
     reference_id: "your_model_id"
 };
 
-// Defaults to backend: "s2"
+// Defaults to backend: "s2-pro"
 const connection = await client.textToSpeech.convertRealtime(request, makeTextStream());
 
 // Collect audio and write to a file when the stream ends
