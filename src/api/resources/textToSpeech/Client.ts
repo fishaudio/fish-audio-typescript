@@ -7,11 +7,7 @@ import { TTSRequest } from "./requests/TTSRequest.js";
 import { encode } from "@msgpack/msgpack";
 
 export type Backends =
-    | 'speech-1.5'
-    | 'speech-1.6'
-    | 'agent-x0'
     | 's1'
-    | 's1-mini'
     | 's2-pro'
     | 's2.1-pro'
     | (string & {});
