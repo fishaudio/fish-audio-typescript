@@ -80,7 +80,7 @@ export enum RealtimeEvents {
  * const connection = await client.textToSpeech.convertRealtime({
  *     request: TTSRequestOptions,
  *     text_stream: "...",
- *     model: "s2-pro",
+ *     model: "s2.1-pro",
  * });
  *
  * connection.on(RealtimeEvents.OPEN, (data) => {

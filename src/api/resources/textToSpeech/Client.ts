@@ -6,7 +6,15 @@ import * as apiErrors from "../../../api/errors/index.js";
 import { TTSRequest } from "./requests/TTSRequest.js";
 import { encode } from "@msgpack/msgpack";
 
-export type Backends = 'speech-1.5' | 'speech-1.6' | 'agent-x0' | 's1' | 's1-mini' | 's2-pro';
+export type Backends =
+    | 'speech-1.5'
+    | 'speech-1.6'
+    | 'agent-x0'
+    | 's1'
+    | 's1-mini'
+    | 's2-pro'
+    | 's2.1-pro'
+    | (string & {});
 
 export declare namespace TextToSpeech {
     export interface Options {
@@ -48,7 +56,7 @@ export class TextToSpeech {
      */
     public convert(
         request: TTSRequest,
-        backend: Backends = "s2-pro",
+        backend: Backends = "s2.1-pro",
         requestOptions?: TextToSpeech.RequestOptions,
     ): core.HttpResponsePromise<ReadableStream<Uint8Array>> {
         return core.HttpResponsePromise.fromPromise(this.__convert(backend, request, requestOptions));
