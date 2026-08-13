@@ -56,6 +56,7 @@ const request: TTSRequest = {
 Or pass `ReferenceAudio` for zero-shot cloning:
 
 ```typescript
+import { File } from "node:buffer";
 import { readFile } from "fs/promises";
 import type { ReferenceAudio, TTSRequest } from "fish-audio";
 

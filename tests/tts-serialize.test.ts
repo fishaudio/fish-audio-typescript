@@ -1,5 +1,7 @@
+/// <reference types="node" />
 import { decode } from "@msgpack/msgpack";
-import { describe, expect, it } from "vitest";
+import { File as NodeFile } from "node:buffer";
+import { describe, expect, it, vi } from "vitest";
 import { serializeTtsRequest } from "../src/api/resources/textToSpeech/serialize.js";
 
 function decodeBody(body: Uint8Array): Record<string, unknown> {
@@ -53,6 +55,24 @@ describe("serializeTtsRequest", () => {
             [{ audio: Uint8Array.of(9, 9), text: "hi" }],
             [{ audio: Uint8Array.of(8, 7, 6), text: "hello" }],
         ]);
+    });
+
+    it("converts node:buffer.File audio when globalThis.File is unavailable", async () => {
+        vi.stubGlobal("File", undefined);
+
+        try {
+            const audio = new NodeFile([Uint8Array.of(4, 5, 6)], "clip.wav") as File;
+            const body = await serializeTtsRequest({
+                text: "cloned",
+                references: [{ audio, text: "transcript" }],
+            });
+
+            expect(decodeBody(body).references).toEqual([
+                { audio: Uint8Array.of(4, 5, 6), text: "transcript" },
+            ]);
+        } finally {
+            vi.unstubAllGlobals();
+        }
     });
 
     it("round-trips OpenAPI body fields including opus bitrate in bps", async () => {

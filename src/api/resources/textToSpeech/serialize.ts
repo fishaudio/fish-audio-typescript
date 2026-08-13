@@ -1,12 +1,8 @@
 import { encode } from "@msgpack/msgpack";
 import { ReferenceAudio, TTSRequest } from "./requests/TTSRequest.js";
 
-async function encodeReference(ref: ReferenceAudio): Promise<{ audio: Uint8Array | File; text: string }> {
-    const audio = ref.audio;
-    if (typeof File !== "undefined" && audio instanceof File) {
-        return { text: ref.text, audio: new Uint8Array(await audio.arrayBuffer()) };
-    }
-    return ref;
+async function encodeReference(ref: ReferenceAudio): Promise<{ audio: Uint8Array; text: string }> {
+    return { text: ref.text, audio: new Uint8Array(await ref.audio.arrayBuffer()) };
 }
 
 async function encodeReferences(
