@@ -32,7 +32,7 @@
         "test": "echo \"No tests yet\" && exit 0",
         "prepack": "npm run build",
         "build": "npm run clean && npm run build:cjs && npm run build:esm",
-        "build:cjs": "tsc --project tsconfig.json --module CommonJS --outDir dist/cjs --moduleResolution node && node ./scripts/write-cjs-package-json.mjs",
+        "build:cjs": "tsc --project tsconfig.cjs.json && node ./scripts/write-cjs-package-json.mjs",
         "build:esm": "tsc --project tsconfig.json --outDir dist/esm --moduleResolution bundler",
         "clean": "rm -rf dist"
     },

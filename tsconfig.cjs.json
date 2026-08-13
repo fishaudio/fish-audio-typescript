@@ -1,0 +1,11 @@
+{
+    "extends": "./tsconfig.json",
+    "compilerOptions": {
+        // Node16 emits require() for static imports but keeps dynamic import().
+        // src/package.json ("type": "commonjs") classifies source as CJS; without
+        // it the root "type": "module" would make this emit ESM into dist/cjs.
+        "module": "Node16",
+        "moduleResolution": "Node16",
+        "outDir": "dist/cjs"
+    }
+}
