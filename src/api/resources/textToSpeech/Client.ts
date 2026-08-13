@@ -3,8 +3,26 @@ import * as core from "../../../core/index.js";
 import { mergeHeaders, mergeOnlyDefinedHeaders } from "../../../core/headers.js";
 import * as errors from "../../../errors/index.js";
 import * as apiErrors from "../../../api/errors/index.js";
-import { TTSRequest } from "./requests/TTSRequest.js";
+import { TTSRequest, ReferenceAudio } from "./requests/TTSRequest.js";
 import { encode } from "@msgpack/msgpack";
+
+async function encodeReference(ref: ReferenceAudio): Promise<{ audio: Uint8Array | File; text: string }> {
+    const audio = ref.audio;
+    if (typeof File !== "undefined" && audio instanceof File) {
+        return { text: ref.text, audio: new Uint8Array(await audio.arrayBuffer()) };
+    }
+    return ref;
+}
+
+async function encodeReferences(
+    references: NonNullable<TTSRequest["references"]>,
+): Promise<unknown> {
+    return Promise.all(
+        references.map((entry) =>
+            Array.isArray(entry) ? Promise.all(entry.map(encodeReference)) : encodeReference(entry),
+        ),
+    );
+}
 
 export type Backends =
     | 's1'
@@ -79,21 +97,9 @@ export class TextToSpeech {
             requestOptions?.headers,
         );
 
-        //Serialize to msgpack
-        let payload: any = request;
-        if (Array.isArray(request.references)) {
-            const refs = await Promise.all(
-                request.references.map(async (r) => {
-                    const audio = (r as any)?.audio;
-                    if (typeof File !== "undefined" && audio instanceof File) {
-                        const buf = new Uint8Array(await audio.arrayBuffer());
-                        return { ...r, audio: buf };
-                    }
-                    return r;
-                })
-            );
-            payload = { ...request, references: refs };
-        }
+        const payload = Array.isArray(request.references)
+            ? { ...request, references: await encodeReferences(request.references) }
+            : request;
         const body = encode(payload);
 
         const _response = await core.fetcher<ReadableStream<Uint8Array>>({
