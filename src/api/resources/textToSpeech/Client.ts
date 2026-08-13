@@ -3,26 +3,8 @@ import * as core from "../../../core/index.js";
 import { mergeHeaders, mergeOnlyDefinedHeaders } from "../../../core/headers.js";
 import * as errors from "../../../errors/index.js";
 import * as apiErrors from "../../../api/errors/index.js";
-import { TTSRequest, ReferenceAudio } from "./requests/TTSRequest.js";
-import { encode } from "@msgpack/msgpack";
-
-async function encodeReference(ref: ReferenceAudio): Promise<{ audio: Uint8Array | File; text: string }> {
-    const audio = ref.audio;
-    if (typeof File !== "undefined" && audio instanceof File) {
-        return { text: ref.text, audio: new Uint8Array(await audio.arrayBuffer()) };
-    }
-    return ref;
-}
-
-async function encodeReferences(
-    references: NonNullable<TTSRequest["references"]>,
-): Promise<unknown> {
-    return Promise.all(
-        references.map((entry) =>
-            Array.isArray(entry) ? Promise.all(entry.map(encodeReference)) : encodeReference(entry),
-        ),
-    );
-}
+import { TTSRequest } from "./requests/TTSRequest.js";
+import { serializeTtsRequest } from "./serialize.js";
 
 export type Backends =
     | 's1'
@@ -97,10 +79,7 @@ export class TextToSpeech {
             requestOptions?.headers,
         );
 
-        const payload = Array.isArray(request.references)
-            ? { ...request, references: await encodeReferences(request.references) }
-            : request;
-        const body = encode(payload);
+        const body = await serializeTtsRequest(request);
 
         const _response = await core.fetcher<ReadableStream<Uint8Array>>({
             url: core.url.join(
