@@ -4,7 +4,7 @@ import { mergeHeaders, mergeOnlyDefinedHeaders } from "../../../core/headers.js"
 import * as errors from "../../../errors/index.js";
 import * as apiErrors from "../../../api/errors/index.js";
 import { TTSRequest } from "./requests/TTSRequest.js";
-import { encode } from "@msgpack/msgpack";
+import { serializeTtsRequest } from "./serialize.js";
 
 export type Backends =
     | 's1'
@@ -79,22 +79,7 @@ export class TextToSpeech {
             requestOptions?.headers,
         );
 
-        //Serialize to msgpack
-        let payload: any = request;
-        if (Array.isArray(request.references)) {
-            const refs = await Promise.all(
-                request.references.map(async (r) => {
-                    const audio = (r as any)?.audio;
-                    if (typeof File !== "undefined" && audio instanceof File) {
-                        const buf = new Uint8Array(await audio.arrayBuffer());
-                        return { ...r, audio: buf };
-                    }
-                    return r;
-                })
-            );
-            payload = { ...request, references: refs };
-        }
-        const body = encode(payload);
+        const body = await serializeTtsRequest(request);
 
         const _response = await core.fetcher<ReadableStream<Uint8Array>>({
             url: core.url.join(
