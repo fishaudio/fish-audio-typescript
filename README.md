@@ -29,13 +29,15 @@ const fishAudio = new FishAudioClient({apiKey: "your_api_key", baseUrl: "https:/
 
 ### Text to Speech
 
+`convert` takes an optional second argument for the model name. It defaults to `"s2.1-pro"`; pass any other supported name when you need it.
+
 ```typescript
 import { FishAudioClient, play } from "fish-audio";
 
 const fishAudio = new FishAudioClient({ apiKey: "your_api_key" });
 
 const request = { text: "Hello, world!" };
-const audio = await fishAudio.textToSpeech.convert(request); //defaults to backend: "s2.1-pro"
+const audio = await fishAudio.textToSpeech.convert(request); // defaults to "s2.1-pro"
 
 await play(audio);
 ```
@@ -51,11 +53,15 @@ const request: TTSRequest = {
 };
 ```
 
-Or just use `ReferenceAudio` in `TTSRequest`:
+Or pass `ReferenceAudio` for zero-shot cloning:
 
 ```typescript
-const audioBuffer = await readFile(new URL("/path/to/your/audio/file",));
-const referenceFile = new File([audioBuffer], "audio_file_name");
+import { File } from "node:buffer";
+import { readFile } from "fs/promises";
+import type { ReferenceAudio, TTSRequest } from "fish-audio";
+
+const audioBuffer = await readFile("path/to/your/audio/file.mp3");
+const referenceFile = new File([audioBuffer], "audio_file_name.mp3");
 
 const referenceAudio: ReferenceAudio = {
     audio: referenceFile,
@@ -66,6 +72,19 @@ const request: TTSRequest = {
     text: "Hello, world!",
     references: [referenceAudio]
 };
+```
+
+#### Multi-speaker (S2 family)
+
+Pass an array of voice IDs and mark speaker turns in the text. This requires `s2-pro` or `s2.1-pro`, not `s1`.
+
+```typescript
+const request: TTSRequest = {
+    text: "<|speaker:0|>Hello!<|speaker:1|>Hi there!",
+    reference_id: ["speaker-a-id", "speaker-b-id"],
+};
+
+const audio = await fishAudio.textToSpeech.convert(request, "s2.1-pro");
 ```
 
 #### WebSocket
@@ -204,5 +223,5 @@ fishAudio.user.get_api_credit()
 
 #### Get User Package
 ```typescript
-fishAudio.voices.get_package()
+fishAudio.user.get_package()
 ```

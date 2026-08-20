@@ -18,7 +18,7 @@
         }
     },
     "scripts": {
-        "test": "echo \"No tests yet\" && exit 0",
+        "test": "vitest run",
         "build": "npm run clean && npm run build:cjs && npm run build:esm",
         "build:cjs": "tsc --project tsconfig.json --module CommonJS --outDir dist/cjs --moduleResolution node",
         "build:esm": "tsc --project tsconfig.json --outDir dist/esm --moduleResolution bundler",
@@ -33,7 +33,8 @@
         "@types/node": "^24.9.1",
         "@types/ws": "^8.18.1",
         "tsup": "^8.5.0",
-        "typescript": "^5.9.3"
+        "typescript": "^5.9.3",
+        "vitest": "^4.1.10"
     },
     "dependencies": {
         "@msgpack/msgpack": "^3.1.2",
