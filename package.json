@@ -33,7 +33,8 @@
         "build": "npm run clean && npm run build:cjs && npm run build:esm",
         "build:cjs": "tsc --project tsconfig.cjs.json && node ./scripts/write-cjs-package-json.mjs",
         "build:esm": "tsc --project tsconfig.json --outDir dist/esm --moduleResolution bundler",
-        "clean": "rm -rf dist"
+        "clean": "rm -rf dist",
+        "prepack": "npm run build"
     },
     "files": [
         "dist"
