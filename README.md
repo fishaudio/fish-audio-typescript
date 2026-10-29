@@ -13,6 +13,8 @@ npm install fish-audio
 Initialize a `FishAudioClient` to use APIs. Authenticate by setting `FISH_API_KEY="your_api_key"`
 in your environment or pass it in.
 
+Get your API key from [fish.audio/app/api-keys](https://fish.audio/app/api-keys/?utm_source=github&utm_medium=sdk-readme&utm_content=typescript).
+
 ```typescript
 import { FishAudioClient } from "fish-audio";
 
