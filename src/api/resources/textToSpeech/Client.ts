@@ -10,6 +10,7 @@ export type Backends =
     | 's1'
     | 's2-pro'
     | 's2.1-pro'
+    | 's2.1-pro-free'
     | (string & {});
 
 export declare namespace TextToSpeech {
