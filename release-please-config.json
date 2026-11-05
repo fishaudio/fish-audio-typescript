@@ -1,0 +1,9 @@
+{
+  "include-component-in-tag": false,
+  "packages": {
+    ".": {
+      "release-type": "node",
+      "package-name": "fish-audio"
+    }
+  }
+}
