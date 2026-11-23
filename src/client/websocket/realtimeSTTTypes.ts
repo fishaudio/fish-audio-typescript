@@ -90,6 +90,8 @@ export interface RealtimeSTTRequest {
 export interface RealtimeSTTRequestOptions {
     /** Ends the session when aborted; the stream then throws the signal's reason. */
     abortSignal?: AbortSignal;
+    /** The maximum time to wait for the connection to open, in seconds. Defaults to 30. */
+    timeoutInSeconds?: number;
 }
 
 /** Settings `configure()` can change during a session. A field you leave out keeps its value. */
@@ -138,8 +140,12 @@ export type RealtimeSTTControlMessage =
     | RealtimeSTTConfigureMessage
     | RealtimeSTTKeepaliveMessage;
 
-/** One item of the audio input: a chunk of PCM bytes, or a control message to send at that position. */
-export type RealtimeSTTAudioInput = Uint8Array | ArrayBuffer | RealtimeSTTControlMessage;
+/**
+ * One item of the audio input: a chunk of PCM bytes (a `Buffer`, any typed array
+ * such as `Int16Array`, or an `ArrayBuffer`), or a control message to send at
+ * that position.
+ */
+export type RealtimeSTTAudioInput = ArrayBufferView | ArrayBuffer | RealtimeSTTControlMessage;
 
 // ---------------------------------------------------------------------------
 // Server events

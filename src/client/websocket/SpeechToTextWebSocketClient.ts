@@ -24,7 +24,7 @@ export class SpeechToTextWebSocket extends SpeechToText {
      * yields it, and ends the session when the source is exhausted.
      *
      * @param request - Session settings. `{}` is valid: 16 kHz audio, automatic turn detection.
-     * @param audioStream - Chunks of PCM audio. A control message such as
+     * @param audioStream - Chunks of PCM audio (`Buffer`, a typed array or `ArrayBuffer`). A control message such as
      * `{ type: "agent_speaking", speaking: true }` in the stream is sent at that position.
      * @param requestOptions - Request-specific configuration.
      * @returns The session: iterate it for events, call its methods to send control messages.
@@ -50,6 +50,8 @@ export class SpeechToTextWebSocket extends SpeechToText {
             request,
             audio: audioStream,
             abortSignal: requestOptions.abortSignal,
+            connectTimeoutMs:
+                requestOptions.timeoutInSeconds != null ? requestOptions.timeoutInSeconds * 1000 : undefined,
             connect: async () => {
                 const apiKey = await core.Supplier.get(this._options.apiKey);
                 if (!apiKey) {
@@ -73,7 +75,8 @@ export class SpeechToTextWebSocket extends SpeechToText {
                 headers.Authorization = `Bearer ${apiKey}`;
                 headers.model = request.model ?? "transcribe-stream-1";
                 return {
-                    url: `${baseUrl.replace(/^http/i, "ws").replace(/\/+$/, "")}/v1/asr/realtime`,
+                    // Joined as HTTP requests are, so a path or query on baseUrl is kept.
+                    url: core.url.join(baseUrl.replace(/^http/i, "ws"), "v1/asr/realtime"),
                     headers,
                 };
             },

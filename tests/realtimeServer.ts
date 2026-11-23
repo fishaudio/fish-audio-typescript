@@ -23,6 +23,8 @@ export class FakeConnection {
         readonly headers: IncomingHttpHeaders,
         /** Header names and values as sent, alternating, so duplicates stay visible. */
         readonly rawHeaders: string[] = [],
+        /** Path and query of the handshake request. */
+        readonly url: string = "",
     ) {
         socket.on("message", (data, isBinary) => {
             if (!isBinary) return;
@@ -102,6 +104,7 @@ export interface FakeServer {
     connections: FakeConnection[];
     /** Resolves with the connection number `index` once the client has connected. */
     connection(index?: number): Promise<FakeConnection>;
+    /** Stops the server. Rejects with the first error a handler threw, so the test fails with it. */
     close(): Promise<void>;
 }
 
@@ -118,9 +121,10 @@ export async function startRealtimeServer(
     const wss = new WebSocketServer({ noServer: true });
     const connections: FakeConnection[] = [];
     const arrivals: Array<() => void> = [];
+    const handlerErrors: unknown[] = [];
 
     http.on("upgrade", (request, socket, head) => {
-        if (request.url !== "/v1/asr/realtime") {
+        if (!(request.url ?? "").split("?")[0]!.endsWith("/v1/asr/realtime")) {
             socket.end("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n");
             return;
         }
@@ -136,10 +140,15 @@ export async function startRealtimeServer(
             return;
         }
         wss.handleUpgrade(request, socket, head, (ws) => {
-            const connection = new FakeConnection(ws, request.headers, request.rawHeaders);
+            const connection = new FakeConnection(ws, request.headers, request.rawHeaders, request.url ?? "");
             connections.push(connection);
             for (const arrived of arrivals.splice(0)) arrived();
-            void Promise.resolve(handler(connection)).catch(() => {});
+            // A failed assertion in the handler must fail the test, not leave it
+            // waiting: drop the connection now, report the error in close().
+            void (async () => handler(connection))().catch((error: unknown) => {
+                handlerErrors.push(error);
+                ws.terminate();
+            });
         });
     });
 
@@ -159,6 +168,9 @@ export async function startRealtimeServer(
             for (const client of wss.clients) client.terminate();
             http.closeAllConnections();
             await new Promise<void>((resolve) => http.close(() => resolve()));
+            if (handlerErrors.length > 0) {
+                throw handlerErrors[0];
+            }
         },
     };
 }

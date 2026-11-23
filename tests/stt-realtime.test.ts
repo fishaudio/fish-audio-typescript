@@ -1,6 +1,7 @@
 /// <reference types="node" />
 import { decode } from "@msgpack/msgpack";
 import { createServer } from "node:net";
+import { runInNewContext } from "node:vm";
 import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -350,6 +351,57 @@ describe("realtime STT session", () => {
         expect(connection.headerValues("model")).toEqual(["transcribe-stream-1"]);
     });
 
+    it("joins the endpoint onto a base URL that has a path and a query", async () => {
+        const server = await serve(async (connection) => {
+            await connection.start();
+            await connection.until("audio_done");
+            connection.done();
+        });
+
+        await collect(transcribe({ url: `${server.url}/gateway/?tenant=a` }, []));
+
+        expect(server.connections[0]!.url).toBe("/gateway/v1/asr/realtime?tenant=a");
+    });
+
+    it("sends audio from any typed array or ArrayBuffer as bin, keeping a view's byte window", async () => {
+        const server = await serve(async (connection) => {
+            await connection.start();
+            await connection.until("audio_done");
+            connection.done();
+        });
+        const samples = Int16Array.of(1, -2, 300);
+        const window = new Uint8Array(Uint8Array.of(9, 9, 5, 6, 9).buffer, 2, 2);
+        const otherRealm = runInNewContext("Uint8Array.of(7, 8)") as Uint8Array;
+        const otherRealmBuffer = runInNewContext("Uint8Array.of(4, 2).buffer") as ArrayBuffer;
+        expect(otherRealm instanceof Uint8Array).toBe(false);
+
+        await collect(transcribe(server, [samples, window, otherRealm, otherRealmBuffer]));
+
+        const received = server.connections[0]!.received.slice(1);
+        expect(received.map((message) => message.type)).toEqual(["audio", "audio", "audio", "audio", "audio_done"]);
+        expect(Array.from(received[0]!.data)).toEqual([1, 0, 0xfe, 0xff, 0x2c, 0x01]);
+        expect(Array.from(received[1]!.data)).toEqual([5, 6]);
+        expect(Array.from(received[2]!.data)).toEqual([7, 8]);
+        expect(Array.from(received[3]!.data)).toEqual([4, 2]);
+    });
+
+    it("configure() always sends a configure message", async () => {
+        const server = await serve(async (connection) => {
+            await connection.start();
+            await connection.until("keepalive");
+            connection.done();
+        });
+        const stream = transcribe(server, silentMicrophone());
+        // An object with a stray `type` is assignable to the configure request.
+        const update = { type: "finalize" as const, results: { drafts: true } };
+
+        await stream.configure(update);
+        await stream.keepalive();
+        await collect(stream);
+
+        expect(server.connections[0]!.received[1]).toEqual({ type: "configure", results: { drafts: true } });
+    });
+
     it("control messages in the audio stream keep their position", async () => {
         const server = await serve(async (connection) => {
             await connection.start();
@@ -543,6 +595,40 @@ describe("realtime STT errors", () => {
         expect(error).toMatchObject({ closeCode: 4500, errorType: undefined });
     });
 
+    it("an earlier recoverable error is not blamed for a connection that drops afterwards", async () => {
+        const server = await serve(async (connection) => {
+            await connection.start();
+            connection.send(errorMessage("invalid_request", 400, true));
+            await sleep(30);
+            connection.socket.terminate();
+        });
+
+        const { events, error } = await failure(transcribe(server, silentMicrophone()));
+
+        expect(events.map((event) => event.type)).toEqual(["session_started", "error"]);
+        expect(error).toBeInstanceOf(RealtimeSTTError);
+        expect(error).toMatchObject({ closeCode: 1006, errorType: undefined, statusCode: undefined });
+    });
+
+    it("a server that accepts the connection but never answers the handshake times out", async () => {
+        const sockets: Array<{ destroy(): void }> = [];
+        const silent = createServer((socket) => sockets.push(socket));
+        await new Promise<void>((resolve) => silent.listen(0, "127.0.0.1", resolve));
+        const { port } = silent.address() as AddressInfo;
+        try {
+            const client = new FishAudioClient({ apiKey: "test-key", baseUrl: `http://127.0.0.1:${port}` });
+            const stream = client.speechToText.convertRealtime({}, [pcm(1)], { timeoutInSeconds: 0.2 });
+
+            const { error } = await within(2000, failure(stream));
+
+            expect(error).toBeInstanceOf(RealtimeSTTError);
+            expect(error.message).toMatch(/timed out/i);
+        } finally {
+            sockets.forEach((socket) => socket.destroy());
+            await new Promise((resolve) => silent.close(resolve));
+        }
+    });
+
     it("a dropped connection throws RealtimeSTTError with close code 1006", async () => {
         const server = await serve(async (connection) => {
             await connection.start();
@@ -686,6 +772,50 @@ describe("realtime STT audio source failures", () => {
         expect(events.map((event) => event.type)).not.toContain("session_done");
     });
 
+    it("does not replace an unrecoverable server error that is waiting for the close", async () => {
+        const server = await serve(async (connection) => {
+            await connection.start();
+            await connection.until("audio");
+            // The error arrives; the close frame is late.
+            connection.send(errorMessage("engine_error", 500, false));
+        });
+
+        const { error } = await within(3000, failure(transcribe(server, failingMicrophone())));
+
+        expect(error).toBeInstanceOf(RealtimeSTTError);
+        expect(error).toMatchObject({ errorType: "engine_error", requestId: "req_test" });
+    });
+
+    it("does not start the audio source when the session is closed as it starts", async () => {
+        const server = await serve((connection) => connection.start().then(() => {}));
+        let microphoneOpened = false;
+        async function* microphone(): AsyncGenerator<Uint8Array> {
+            microphoneOpened = true;
+            yield pcm(1);
+        }
+        const stream = transcribe(server, microphone());
+
+        expect((await stream.next()).value.type).toBe("session_started");
+        const closed = stream.close();
+        await closed;
+        await sleep(30);
+
+        expect(microphoneOpened).toBe(false);
+        expect(server.connections[0]!.received.map((message) => message.type)).toEqual(["config"]);
+    });
+
+    it("aborting with null as the reason throws null, as the signal says", async () => {
+        const server = await serve((connection) => connection.start().then(() => {}));
+        const controller = new AbortController();
+        const stream = transcribe(server, silentMicrophone(), {}, controller.signal);
+        await stream.next();
+
+        const pending = stream.next();
+        controller.abort(null);
+
+        await expect(pending).rejects.toBeNull();
+    });
+
     it("aborting ends the session with the abort reason, even while audio is flowing", async () => {
         const server = await serve((connection) => connection.start().then(() => {}));
         const controller = new AbortController();
@@ -719,6 +849,20 @@ describe("realtime STT audio source failures", () => {
     });
 });
 
+describe("the fake realtime server", () => {
+    it("reports a failed assertion in a handler instead of leaving the client waiting", async () => {
+        const server = await startRealtimeServer(async (connection) => {
+            await connection.next();
+            expect("the config").toBe("something else");
+        });
+
+        // The connection is dropped, so the client is not left waiting for session_started.
+        const { error } = await within(2000, failure(transcribe(server, silentMicrophone())));
+        expect(error).toBeInstanceOf(RealtimeSTTError);
+        await expect(server.close()).rejects.toThrow(/something else/);
+    });
+});
+
 describe("realtime STT closing", () => {
     it("close() wakes a consumer that is waiting for the next event", async () => {
         const server = await serve((connection) => connection.start().then(() => {}));
@@ -740,9 +884,7 @@ describe("realtime STT closing", () => {
 
         expect(await stream.next()).toEqual({ done: true, value: undefined });
         await sleep(50);
-        for (const connection of server.connections) {
-            expect(await within(2000, connection.closed)).toBeTypeOf("number");
-        }
+        expect(server.connections).toHaveLength(0);
     });
 
     it("leaving the loop early closes the connection, stops the sender and closes the audio source", async () => {
@@ -782,11 +924,17 @@ describe("realtime STT closing", () => {
             await connection.closed;
             serverSawClose = true;
         });
-        const stream = transcribe(server, [pcm(1)]);
+        let stateAtSessionDone: number | undefined;
 
-        const events = await collect(stream);
+        for await (const event of transcribe(server, [pcm(1)])) {
+            if (event.type === "session_done") {
+                // Observed at the moment the event is handed over, not afterwards.
+                stateAtSessionDone = server.connections[0]!.socket.readyState;
+            }
+        }
 
-        expect(events.at(-1)!.type).toBe("session_done");
+        // 2 is CLOSING, 3 is CLOSED: the client's close frame has arrived.
+        expect(stateAtSessionDone).toBeGreaterThanOrEqual(2);
         expect(await within(2000, server.connections[0]!.closed)).toBe(1000);
         expect(serverSawClose).toBe(true);
     });

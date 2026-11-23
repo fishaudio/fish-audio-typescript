@@ -161,7 +161,7 @@ try {
 }
 ```
 
-`convert` runs on the API's default model, `transcribe-1`. Pass `model` to choose another one, such as `transcribe-1-pro`:
+Unless a `model` header is configured, `convert` runs on the API's default model, `transcribe-1`. Pass `model` to choose another one, such as `transcribe-1-pro`; it takes precedence over a `model` header:
 
 ```typescript
 const result = await fishAudio.speechToText.convert({

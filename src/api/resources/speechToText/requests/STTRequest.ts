@@ -6,7 +6,8 @@ export interface STTRequest {
     /**
      * Model to transcribe with, such as `"transcribe-1-pro"`. Sent as the `model`
      * header, and takes precedence over a `model` header in the request options.
-     * When omitted, the request runs on the API's default model.
+     * When omitted and no `model` header is configured either, the request runs
+     * on the API's default model.
      */
     model?: STTModel;
     language?: string;

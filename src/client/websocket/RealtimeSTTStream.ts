@@ -1,6 +1,7 @@
 import WebSocket from "ws";
 import { decode, encode } from "@msgpack/msgpack";
 import type { IncomingMessage } from "node:http";
+import { types } from "node:util";
 import * as apiErrors from "../../api/errors/index.js";
 import { FishAudioError } from "../../errors/FishAudioError.js";
 import { RealtimeSTTError } from "../../errors/RealtimeSTTError.js";
@@ -24,6 +25,9 @@ import type {
  * delivered, so the buffer can briefly hold a little more.
  */
 const EVENT_BUFFER_SIZE = 256;
+
+/** Default for how long the connection may take to open. */
+const DEFAULT_CONNECT_TIMEOUT_MS = 30_000;
 
 /** How long a closing connection may take before it is dropped. */
 const CLOSE_TIMEOUT_MS = 1000;
@@ -159,11 +163,14 @@ export class RealtimeSTTStream implements AsyncIterableIterator<RealtimeSTTEvent
     readonly #sessionStarted = deferred();
     #sessionDone: RealtimeSTTSessionDoneEvent | undefined;
     #fatalError: RealtimeSTTErrorEvent | undefined;
-    #lastError: RealtimeSTTErrorEvent | undefined;
+    /** `server_restarting`, when it is the last message before the server closes. */
+    #restarting: RealtimeSTTErrorEvent | undefined;
+    readonly #connectTimeoutMs: number;
 
     readonly #abortSignal: AbortSignal | undefined;
     readonly #onAbort = (): void => {
-        this.#end(abortReason(this.#abortSignal));
+        // The signal's own reason, whatever it is, as fetch() does.
+        this.#end(this.#abortSignal?.reason);
     };
 
     /** @internal Use `client.speechToText.convertRealtime()`. */
@@ -172,10 +179,12 @@ export class RealtimeSTTStream implements AsyncIterableIterator<RealtimeSTTEvent
         request: RealtimeSTTRequest;
         audio: Iterable<RealtimeSTTAudioInput> | AsyncIterable<RealtimeSTTAudioInput>;
         abortSignal?: AbortSignal | undefined;
+        connectTimeoutMs?: number | undefined;
     }) {
+        this.#connectTimeoutMs = params.connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS;
         this.#abortSignal = params.abortSignal;
         if (this.#abortSignal?.aborted) {
-            this.#end(abortReason(this.#abortSignal));
+            this.#end(this.#abortSignal.reason);
             return;
         }
         this.#abortSignal?.addEventListener("abort", this.#onAbort, { once: true });
@@ -248,7 +257,8 @@ export class RealtimeSTTStream implements AsyncIterableIterator<RealtimeSTTEvent
 
     /** Changes settings during the session. The server answers with a `configured` event. */
     public configure(update: RealtimeSTTConfigureRequest): Promise<void> {
-        return this.send({ type: "configure", ...update });
+        // `type` last: a stray `type` on the update must not change the message.
+        return this.send({ ...update, type: "configure" });
     }
 
     /** Keeps an idle session open. A session closes after 30 seconds without any client message. */
@@ -306,7 +316,12 @@ export class RealtimeSTTStream implements AsyncIterableIterator<RealtimeSTTEvent
         let websocket: WebSocket;
         try {
             // Throws at once for a malformed URL or a header value that HTTP does not allow.
-            websocket = new WebSocket(params.url, { headers: params.headers });
+            websocket = new WebSocket(params.url, {
+                headers: params.headers,
+                // Without it, a peer that accepts the connection and never
+                // answers the upgrade would leave the stream waiting forever.
+                handshakeTimeout: this.#connectTimeoutMs,
+            });
         } catch (error) {
             this.#end(connectionError("Could not open the realtime connection", toError(error)));
             return;
@@ -347,9 +362,7 @@ export class RealtimeSTTStream implements AsyncIterableIterator<RealtimeSTTEvent
     }
 
     #receive(event: RealtimeSTTEvent): void {
-        if (event.type !== "error") {
-            this.#lastError = undefined;
-        }
+        this.#restarting = undefined;
         switch (event.type) {
             case "session_started":
                 this.#push(event);
@@ -362,8 +375,13 @@ export class RealtimeSTTStream implements AsyncIterableIterator<RealtimeSTTEvent
                 this.#closeWebSocket();
                 return;
             case "error":
-                this.#lastError = event;
                 if (event.recoverable) {
+                    // The one recoverable error that the server follows with a
+                    // close (1012): it then explains the close. Any other
+                    // recoverable error says nothing about a later close.
+                    if (event.error_type === "server_restarting") {
+                        this.#restarting = event;
+                    }
                     this.#push(event);
                 } else {
                     // The server closes next, and its close code completes the
@@ -388,7 +406,7 @@ export class RealtimeSTTStream implements AsyncIterableIterator<RealtimeSTTEvent
             return;
         }
         const closeCode = this.#droppedByClient ? undefined : code;
-        const error = this.#fatalError ?? (code === 1000 ? undefined : this.#lastError);
+        const error = this.#fatalError ?? (code === 1000 ? undefined : this.#restarting);
         if (error !== undefined) {
             this.#end(
                 new RealtimeSTTError({
@@ -497,6 +515,10 @@ export class RealtimeSTTStream implements AsyncIterableIterator<RealtimeSTTEvent
         } catch {
             return;
         }
+        if (this.#ended) {
+            // Closed in the same turn as session_started: do not start the audio source.
+            return;
+        }
         try {
             for await (const item of audio) {
                 if (this.#ended) {
@@ -511,6 +533,11 @@ export class RealtimeSTTStream implements AsyncIterableIterator<RealtimeSTTEvent
         } catch (error) {
             if (error instanceof SendFailed) {
                 // The connection went away; its close or error event ends the session.
+                return;
+            }
+            if (this.#fatalError !== undefined) {
+                // The server already ended the session with an error; that one
+                // is reported, once the close (or its timeout) completes it.
                 return;
             }
             // The audio source failed: the session ends with its error.
@@ -548,10 +575,6 @@ function deferred(): { promise: Promise<void>; resolve: () => void; reject: () =
     // Nobody may be waiting when the session ends.
     promise.catch(() => {});
     return { promise, resolve, reject };
-}
-
-function abortReason(signal: AbortSignal | undefined): unknown {
-    return signal?.reason ?? new DOMException("This operation was aborted", "AbortError");
 }
 
 function toError(value: unknown): Error {
@@ -618,12 +641,16 @@ function toBytes(data: WebSocket.RawData): Uint8Array {
     return data instanceof ArrayBuffer ? new Uint8Array(data) : data;
 }
 
-function isBytes(item: RealtimeSTTAudioInput): item is Uint8Array | ArrayBuffer {
-    return item instanceof Uint8Array || item instanceof ArrayBuffer;
+// These checks hold for values from another realm (a `node:vm` context, a
+// worker), where `instanceof` does not.
+function isBytes(item: RealtimeSTTAudioInput): item is ArrayBufferView | ArrayBuffer {
+    return ArrayBuffer.isView(item) || types.isAnyArrayBuffer(item);
 }
 
-function toUint8Array(bytes: Uint8Array | ArrayBuffer): Uint8Array {
-    return bytes instanceof ArrayBuffer ? new Uint8Array(bytes) : bytes;
+function toUint8Array(bytes: ArrayBufferView | ArrayBuffer): Uint8Array {
+    return ArrayBuffer.isView(bytes)
+        ? new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+        : new Uint8Array(bytes);
 }
 
 function nonEmpty<T extends object>(value: T): T | undefined {
