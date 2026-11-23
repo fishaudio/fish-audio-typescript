@@ -52,6 +52,7 @@ export class SpeechToText {
      *     import { createReadStream } from "fs";
      *     await client.speechToText.convert({
      *         audio: new File([], "audio.mp3"),
+     *         model: "transcribe-1-pro",
      *     })
      */
     public convert(
@@ -91,6 +92,9 @@ export class SpeechToText {
             }),
             requestOptions?.headers,
         );
+        if (request.model != null) {
+            _headers = withModelHeader(_headers, request.model);
+        }
         const _response = await core.fetcher({
             url: core.url.join(
                 (await core.Supplier.get(this._options.baseUrl)) ??
@@ -144,4 +148,22 @@ export class SpeechToText {
                 });
         }
     }
+}
+
+/**
+ * Sets the `model` header, dropping any header that differs from it only in
+ * case (`Model`, `MODEL`), so the request never carries two of them.
+ */
+export function withModelHeader<THeaderValue>(
+    headers: Record<string, THeaderValue>,
+    model: string,
+): Record<string, THeaderValue | string> {
+    const result: Record<string, THeaderValue | string> = {};
+    for (const [key, value] of Object.entries(headers)) {
+        if (key.toLowerCase() !== "model") {
+            result[key] = value;
+        }
+    }
+    result.model = model;
+    return result;
 }
