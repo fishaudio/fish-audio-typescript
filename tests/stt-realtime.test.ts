@@ -304,6 +304,52 @@ describe("realtime STT session", () => {
         });
     });
 
+    it("sends the client's extra headers in the handshake", async () => {
+        const server = await serve(async (connection) => {
+            await connection.start();
+            await connection.until("audio_done");
+            connection.done();
+        });
+        const client = new FishAudioClient({
+            apiKey: "test-key",
+            baseUrl: server.url,
+            headers: {
+                "X-Gateway-Token": "gateway-secret",
+                "X-From-Supplier": () => Promise.resolve("supplied"),
+                "X-Removed": null,
+            },
+        });
+
+        await collect(client.speechToText.convertRealtime({}, []));
+
+        const connection = server.connections[0]!;
+        expect(connection.headerValues("x-gateway-token")).toEqual(["gateway-secret"]);
+        expect(connection.headerValues("x-from-supplier")).toEqual(["supplied"]);
+        expect(connection.headerValues("x-removed")).toEqual([]);
+        expect(connection.headerValues("user-agent")).toEqual(["fish-audio"]);
+        expect(connection.headerValues("authorization")).toEqual(["Bearer test-key"]);
+        expect(connection.headerValues("model")).toEqual(["transcribe-stream-1"]);
+    });
+
+    it("the API key and the realtime model win over extra headers of any casing, and each is sent once", async () => {
+        const server = await serve(async (connection) => {
+            await connection.start();
+            await connection.until("audio_done");
+            connection.done();
+        });
+        const client = new FishAudioClient({
+            apiKey: () => "test-key",
+            baseUrl: server.url,
+            headers: { authorization: "Bearer from-headers", MODEL: "transcribe-1-pro" },
+        });
+
+        await collect(client.speechToText.convertRealtime({}, []));
+
+        const connection = server.connections[0]!;
+        expect(connection.headerValues("authorization")).toEqual(["Bearer test-key"]);
+        expect(connection.headerValues("model")).toEqual(["transcribe-stream-1"]);
+    });
+
     it("control messages in the audio stream keep their position", async () => {
         const server = await serve(async (connection) => {
             await connection.start();
@@ -534,6 +580,32 @@ describe("realtime STT errors", () => {
 
         expect(error).toBeInstanceOf(RealtimeSTTError);
         expect(error.cause).toMatchObject({ code: "ECONNREFUSED" });
+    });
+
+    it.each([
+        ["a base URL that is not a URL", { apiKey: "test-key", baseUrl: "not a url" }],
+        ["an API key that is not a valid header value", { apiKey: "line one\nline two", baseUrl: "http://127.0.0.1:9" }],
+        [
+            "an extra header that is not a valid header value",
+            { apiKey: "test-key", baseUrl: "http://127.0.0.1:9", headers: { "X-Gateway-Token": "line one\nline two" } },
+        ],
+    ])("%s throws RealtimeSTTError from the stream instead of escaping it", async (_name, options) => {
+        const unhandled: unknown[] = [];
+        const onUnhandled = (reason: unknown) => unhandled.push(reason);
+        process.on("unhandledRejection", onUnhandled);
+        try {
+            const stream = new FishAudioClient(options).speechToText.convertRealtime({}, [pcm(1)]);
+            // A reader that is already waiting must be woken with the error.
+            const pending = stream.next();
+
+            await expect(within(1000, pending, "the pending read")).rejects.toBeInstanceOf(RealtimeSTTError);
+            expect(await stream.next()).toEqual({ done: true, value: undefined });
+            await expect(stream.keepalive()).rejects.toBeInstanceOf(RealtimeSTTError);
+            await sleep(20);
+            expect(unhandled).toEqual([]);
+        } finally {
+            process.off("unhandledRejection", onUnhandled);
+        }
     });
 
     it.each([

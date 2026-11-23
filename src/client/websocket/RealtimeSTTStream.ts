@@ -303,7 +303,14 @@ export class RealtimeSTTStream implements AsyncIterableIterator<RealtimeSTTEvent
             return;
         }
 
-        const websocket = new WebSocket(params.url, { headers: params.headers });
+        let websocket: WebSocket;
+        try {
+            // Throws at once for a malformed URL or a header value that HTTP does not allow.
+            websocket = new WebSocket(params.url, { headers: params.headers });
+        } catch (error) {
+            this.#end(connectionError("Could not open the realtime connection", toError(error)));
+            return;
+        }
         this.#websocket = websocket;
 
         websocket.on("open", () => {
@@ -545,6 +552,10 @@ function deferred(): { promise: Promise<void>; resolve: () => void; reject: () =
 
 function abortReason(signal: AbortSignal | undefined): unknown {
     return signal?.reason ?? new DOMException("This operation was aborted", "AbortError");
+}
+
+function toError(value: unknown): Error {
+    return value instanceof Error ? value : new Error(String(value));
 }
 
 function connectionError(prefix: string, cause: Error): RealtimeSTTError {

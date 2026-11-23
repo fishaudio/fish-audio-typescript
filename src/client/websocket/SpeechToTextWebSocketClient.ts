@@ -59,12 +59,22 @@ export class SpeechToTextWebSocket extends SpeechToText {
                     (await core.Supplier.get(this._options.baseUrl)) ??
                     (await core.Supplier.get(this._options.environment)) ??
                     environments.FishAudioEnvironment.Production;
+                // The client's extra headers go along, as they do on HTTP requests
+                // (a gateway in front of a custom baseUrl may need them). The API
+                // key and the realtime model replace a header of the same name in
+                // any casing, so the handshake never carries two of either.
+                const headers: Record<string, string> = {};
+                for (const [name, supplier] of Object.entries(this._options.headers ?? {})) {
+                    const value = await core.Supplier.get(supplier);
+                    if (value != null && !["authorization", "model"].includes(name.toLowerCase())) {
+                        headers[name] = value;
+                    }
+                }
+                headers.Authorization = `Bearer ${apiKey}`;
+                headers.model = request.model ?? "transcribe-stream-1";
                 return {
                     url: `${baseUrl.replace(/^http/i, "ws").replace(/\/+$/, "")}/v1/asr/realtime`,
-                    headers: {
-                        Authorization: `Bearer ${apiKey}`,
-                        model: request.model ?? "transcribe-stream-1",
-                    },
+                    headers,
                 };
             },
         });

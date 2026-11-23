@@ -21,6 +21,8 @@ export class FakeConnection {
     constructor(
         readonly socket: WebSocket,
         readonly headers: IncomingHttpHeaders,
+        /** Header names and values as sent, alternating, so duplicates stay visible. */
+        readonly rawHeaders: string[] = [],
     ) {
         socket.on("message", (data, isBinary) => {
             if (!isBinary) return;
@@ -39,6 +41,17 @@ export class FakeConnection {
             });
         });
         socket.on("error", () => {});
+    }
+
+    /** Every value the handshake carried for a header, whatever its casing. */
+    headerValues(name: string): string[] {
+        const values: string[] = [];
+        for (let i = 0; i < this.rawHeaders.length; i += 2) {
+            if (this.rawHeaders[i]!.toLowerCase() === name.toLowerCase()) {
+                values.push(this.rawHeaders[i + 1]!);
+            }
+        }
+        return values;
     }
 
     /** The next client message, or `undefined` once the connection is closed. */
@@ -123,7 +136,7 @@ export async function startRealtimeServer(
             return;
         }
         wss.handleUpgrade(request, socket, head, (ws) => {
-            const connection = new FakeConnection(ws, request.headers);
+            const connection = new FakeConnection(ws, request.headers, request.rawHeaders);
             connections.push(connection);
             for (const arrived of arrivals.splice(0)) arrived();
             void Promise.resolve(handler(connection)).catch(() => {});
