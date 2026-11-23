@@ -161,6 +161,70 @@ try {
 }
 ```
 
+`convert` runs on the API's default model, `transcribe-1`. Pass `model` to choose another one, such as `transcribe-1-pro`:
+
+```typescript
+const result = await fishAudio.speechToText.convert({
+    audio: audioFile,
+    model: "transcribe-1-pro",
+});
+```
+
+#### Realtime (Preview)
+
+`convertRealtime` streams live audio to `transcribe-stream-1` over a WebSocket and returns the transcript turn by turn. Send 16-bit little-endian mono PCM in chunks of 20–40 ms as you capture it. The returned stream is an async iterable of events; narrow them by `type`.
+
+```typescript
+import { FishAudioClient } from "fish-audio";
+import { createReadStream } from "fs";
+
+const fishAudio = new FishAudioClient();
+
+// Raw 16-bit mono PCM at 16 kHz, 40 ms (1280 bytes) per chunk.
+// From a file this sends faster than real time; a microphone yields chunks as it captures them.
+async function* audioChunks() {
+    yield* createReadStream("speech.pcm", { highWaterMark: 1280 });
+}
+
+// diarize: false gives plain text. By default the text starts with a speaker tag: "<|speaker:0|> Hello."
+const stream = fishAudio.speechToText.convertRealtime(
+    { sample_rate: 16000, drafts: true, diarize: false },
+    audioChunks(),
+);
+
+for await (const event of stream) {
+    if (event.type === "draft") {
+        console.log("...", event.text); // live text of the open turn, not final
+    } else if (event.type === "committed") {
+        console.log(event.text); // final transcript of the turn
+    }
+}
+```
+
+The session ends with a `session_done` event once the audio source is exhausted. Leaving the loop early, or calling `stream.close()`, closes the connection.
+
+The stream also sends control messages while the session runs:
+
+```typescript
+await stream.finalize(); // commit the open turn now (push-to-talk, with turn_detection: "manual")
+await stream.agentSpeaking(true); // voice agents: your agent started speaking
+await stream.addContext([{ role: "assistant", text: "Which day works for you?" }]);
+await stream.configure({ turn_detection: { mode: "vad", silence_timeout_ms: 900 } });
+await stream.keepalive(); // a session closes after 30 seconds without any client message
+```
+
+Errors are thrown from the loop:
+
+- `RealtimeSTTError` when the server ends the session or the connection is lost. It carries `errorType` (such as `unsupported_audio`), `statusCode`, `requestId` and the WebSocket `closeCode`.
+- `UnauthorizedError`, or `FishAudioError` with a `statusCode` such as 402 or 429, when the connection is refused.
+- The audio source's own error when the audio source throws.
+
+An error the session survives arrives as an `error` event with `recoverable: true` instead.
+
+`convertRealtime` runs in Node.js only, like the TTS WebSocket: browsers cannot set the `Authorization` header on a WebSocket.
+
+[Learn more](https://docs.fish.audio/features/speech-to-text/realtime)
+
 ### Voices
 
 #### Clone a Voice
