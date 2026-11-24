@@ -33,6 +33,14 @@ const fishAudio = new FishAudioClient({apiKey: "your_api_key", baseUrl: "https:/
 
 `convert` takes an optional second argument for the model name. It defaults to `"s2.1-pro"`; pass any other supported name when you need it.
 
+| Model | Notes |
+| --- | --- |
+| `s2.1-pro` | Current flagship (default) |
+| `s2.1-pro-free` | Free tier of `s2.1-pro` |
+| `drama-3` | Expressive model you direct in plain language |
+| `s2-pro` | Previous generation |
+| `s1` | Deprecated, retires on 2026-12-31 |
+
 ```typescript
 import { FishAudioClient, play } from "fish-audio";
 
@@ -42,6 +50,8 @@ const request = { text: "Hello, world!" };
 const audio = await fishAudio.textToSpeech.convert(request); // defaults to "s2.1-pro"
 
 await play(audio);
+
+const drama = await fishAudio.textToSpeech.convert(request, "drama-3");
 ```
 
 #### Reference Audio
