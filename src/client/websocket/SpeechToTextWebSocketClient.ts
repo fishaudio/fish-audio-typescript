@@ -70,8 +70,12 @@ export class SpeechToTextWebSocket extends SpeechToText {
                 // any casing, so the handshake never carries two of either.
                 const headers: Record<string, string> = {};
                 for (const [name, supplier] of Object.entries(this._options.headers ?? {})) {
+                    if (["authorization", "model"].includes(name.toLowerCase())) {
+                        // Replaced below, so its supplier is not run either.
+                        continue;
+                    }
                     const value = await core.Supplier.get(supplier);
-                    if (value != null && !["authorization", "model"].includes(name.toLowerCase())) {
+                    if (value != null) {
                         headers[name] = value;
                     }
                 }

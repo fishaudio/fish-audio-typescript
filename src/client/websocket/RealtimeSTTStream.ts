@@ -167,6 +167,7 @@ export class RealtimeSTTStream implements AsyncIterableIterator<RealtimeSTTEvent
     #websocket: WebSocket | undefined;
     #paused = false;
     #closeTimer: ReturnType<typeof setTimeout> | undefined;
+    #openTimer: ReturnType<typeof setTimeout> | undefined;
     #droppedByClient = false;
 
     readonly #configSent = deferred();
@@ -334,6 +335,18 @@ export class RealtimeSTTStream implements AsyncIterableIterator<RealtimeSTTEvent
     // ----- connection ------------------------------------------------------
 
     async #open(connect: () => Promise<RealtimeSTTConnectParams>, config: Uint8Array): Promise<void> {
+        // One deadline for the whole opening: resolving the connection
+        // parameters, connecting, and the WebSocket handshake. Without it, a
+        // peer that accepts the connection and never answers the upgrade (or a
+        // supplier that never resolves) would leave the stream waiting forever.
+        this.#openTimer = setTimeout(() => {
+            this.#end(
+                new RealtimeSTTError({
+                    message: `The realtime connection timed out: it did not open within ${this.#connectTimeoutMs / 1000} s.`,
+                }),
+            );
+        }, this.#connectTimeoutMs);
+
         let params: RealtimeSTTConnectParams;
         try {
             params = await connect();
@@ -348,12 +361,7 @@ export class RealtimeSTTStream implements AsyncIterableIterator<RealtimeSTTEvent
         let websocket: WebSocket;
         try {
             // Throws at once for a malformed URL or a header value that HTTP does not allow.
-            websocket = new WebSocket(params.url, {
-                headers: params.headers,
-                // Without it, a peer that accepts the connection and never
-                // answers the upgrade would leave the stream waiting forever.
-                handshakeTimeout: this.#connectTimeoutMs,
-            });
+            websocket = new WebSocket(params.url, { headers: params.headers });
         } catch (error) {
             this.#end(connectionError("Could not open the realtime connection", toError(error)));
             return;
@@ -365,6 +373,7 @@ export class RealtimeSTTStream implements AsyncIterableIterator<RealtimeSTTEvent
         websocket.on(
             "open",
             this.#guarded(() => {
+                clearTimeout(this.#openTimer);
                 websocket.send(
                     config,
                     this.#guarded((error?: Error | null) => {
@@ -535,6 +544,7 @@ export class RealtimeSTTStream implements AsyncIterableIterator<RealtimeSTTEvent
             this.#hasError = true;
         }
         this.#abortSignal?.removeEventListener("abort", this.#onAbort);
+        clearTimeout(this.#openTimer);
         this.#configSent.reject();
         this.#sessionStarted.reject();
         try {
@@ -601,9 +611,17 @@ export class RealtimeSTTStream implements AsyncIterableIterator<RealtimeSTTEvent
         try {
             // Iterated by hand, not with `for await`: the session must be able
             // to call return() while a read is pending (see #stopAudio).
+            // The async method when there is one, else the sync one, as `for await` chooses.
+            const asyncMethod = (audio as Partial<AsyncIterable<RealtimeSTTAudioInput>>)[Symbol.asyncIterator];
             const iterator: Iterator<RealtimeSTTAudioInput> | AsyncIterator<RealtimeSTTAudioInput> =
-                Symbol.asyncIterator in audio ? audio[Symbol.asyncIterator]() : audio[Symbol.iterator]();
+                asyncMethod != null
+                    ? asyncMethod.call(audio)
+                    : (audio as Iterable<RealtimeSTTAudioInput>)[Symbol.iterator]();
             this.#audioIterator = iterator;
+            if (this.#ended) {
+                // Creating the iterator ended the session: do not read from it.
+                return;
+            }
             for (;;) {
                 const result = await iterator.next();
                 if (result.done) {
@@ -619,8 +637,9 @@ export class RealtimeSTTStream implements AsyncIterableIterator<RealtimeSTTEvent
                 try {
                     frame = encodeClientMessage(isBytes(item) ? { type: "audio", data: toUint8Array(item) } : item);
                 } catch (error) {
-                    this.#end(encodingError("an item of the audio stream", error));
-                    return;
+                    // Handled below like a failing source, so that it does not
+                    // replace a server error that is waiting for the close.
+                    throw encodingError("an item of the audio stream", error);
                 }
                 await this.#sendFrame(frame);
             }
@@ -637,8 +656,8 @@ export class RealtimeSTTStream implements AsyncIterableIterator<RealtimeSTTEvent
                 // is reported, once the close (or its timeout) completes it.
                 return;
             }
-            // The audio source failed: the session ends with its error.
-            this.#audioIterator = undefined;
+            // The audio source failed, or gave an item that cannot be sent: the
+            // session ends with that error, and the source is stopped below.
             this.#end(error);
         } finally {
             // However the sender stopped, the source is not left running.
@@ -655,11 +674,15 @@ export class RealtimeSTTStream implements AsyncIterableIterator<RealtimeSTTEvent
     #stopAudio(): void {
         const iterator = this.#audioIterator;
         this.#audioIterator = undefined;
-        if (iterator === undefined || typeof iterator.return !== "function") {
+        if (iterator === undefined) {
             return;
         }
         try {
-            void Promise.resolve(iterator.return()).catch(() => {});
+            // Inside the try from the lookup on: a getter may throw too.
+            const stop: unknown = iterator.return;
+            if (typeof stop === "function") {
+                void Promise.resolve((stop as () => unknown).call(iterator)).catch(() => {});
+            }
         } catch {
             // Cleanup of the caller's source must not fail the session.
         }
@@ -700,7 +723,15 @@ function deferred(): { promise: Promise<void>; resolve: () => void; reject: () =
 }
 
 function toError(value: unknown): Error {
-    return value instanceof Error ? value : new Error(String(value));
+    if (value instanceof Error) {
+        return value;
+    }
+    try {
+        return new Error(String(value));
+    } catch {
+        // For example an object without a prototype, which has no toString().
+        return new Error("a value that cannot be shown was thrown");
+    }
 }
 
 function encodingError(what: string, cause: unknown): RealtimeSTTError {

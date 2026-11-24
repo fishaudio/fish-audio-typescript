@@ -1,6 +1,7 @@
 /// <reference types="node" />
 import { decode } from "@msgpack/msgpack";
 import { createServer } from "node:net";
+import { getEventListeners } from "node:events";
 import { runInNewContext } from "node:vm";
 import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
@@ -102,6 +103,22 @@ async function* liveMicrophone(onClosed?: () => void): AsyncGenerator<Uint8Array
     } finally {
         onClosed?.();
     }
+}
+
+/** Collects errors that escape to the process instead of reaching the stream. */
+async function escaped(run: () => Promise<void>): Promise<unknown[]> {
+    const errors: unknown[] = [];
+    const onError = (error: unknown) => errors.push(error);
+    process.on("uncaughtException", onError);
+    process.on("unhandledRejection", onError);
+    try {
+        await run();
+        await sleep(30);
+    } finally {
+        process.off("uncaughtException", onError);
+        process.off("unhandledRejection", onError);
+    }
+    return errors;
 }
 
 const committed = (text: string, extra: Message = {}): Message => ({
@@ -720,22 +737,6 @@ describe("realtime STT errors", () => {
 });
 
 describe("realtime STT messages that cannot be encoded", () => {
-    /** Collects errors that escape to the process instead of reaching the stream. */
-    async function escaped(run: () => Promise<void>): Promise<unknown[]> {
-        const errors: unknown[] = [];
-        const onError = (error: unknown) => errors.push(error);
-        process.on("uncaughtException", onError);
-        process.on("unhandledRejection", onError);
-        try {
-            await run();
-            await sleep(30);
-        } finally {
-            process.off("uncaughtException", onError);
-            process.off("unhandledRejection", onError);
-        }
-        return errors;
-    }
-
     // MessagePack has no encoding for a function.
     const unencodable = [() => "Fish Audio"] as unknown as string[];
 
@@ -938,9 +939,19 @@ describe("the fake realtime server", () => {
         });
 
         // The connection is dropped, so the client is not left waiting for session_started.
-        const { error } = await within(2000, failure(transcribe(server, silentMicrophone())));
-        expect(error).toBeInstanceOf(RealtimeSTTError);
-        await expect(server.close()).rejects.toThrow(/something else/);
+        // Closed in `finally`: afterEach does not know this server, and its
+        // close() is expected to reject.
+        let closeError: unknown;
+        try {
+            const { error } = await within(2000, failure(transcribe(server, silentMicrophone())));
+            expect(error).toBeInstanceOf(RealtimeSTTError);
+        } finally {
+            closeError = await server.close().then(
+                () => undefined,
+                (error: unknown) => error,
+            );
+        }
+        expect(String(closeError)).toMatch(/something else/);
     });
 });
 
@@ -1240,5 +1251,357 @@ describe("realtime STT backpressure", () => {
         }
 
         expect(await within(3000, server.connections[0]!.closed)).toBeTypeOf("number");
+    });
+});
+
+describe("realtime STT connection deadline", () => {
+    it("covers the time before the socket is created, such as an API key that never resolves", async () => {
+        const server = await serve((connection) => connection.start().then(() => {}));
+        const client = new FishAudioClient({ apiKey: () => new Promise<string>(() => {}), baseUrl: server.url });
+        const stream = client.speechToText.convertRealtime({}, [pcm(1)], { timeoutInSeconds: 0.2 });
+
+        const { error } = await within(2000, failure(stream));
+
+        expect(error).toBeInstanceOf(RealtimeSTTError);
+        expect(error.message).toMatch(/timed out/i);
+        expect(server.connections).toHaveLength(0);
+    });
+
+    it("does not end a session that opened in time", async () => {
+        const server = await serve(async (connection) => {
+            await connection.start();
+            await connection.until("audio_done");
+            await sleep(400);
+            connection.done();
+        });
+        const client = new FishAudioClient({ apiKey: "test-key", baseUrl: server.url });
+        const stream = client.speechToText.convertRealtime({}, [pcm(1)], { timeoutInSeconds: 0.2 });
+
+        const events = await within(3000, collect(stream));
+
+        expect(events.map((event) => event.type)).toEqual(["session_started", "session_done"]);
+    });
+
+    it("does not run the supplier of a header the SDK sets itself", async () => {
+        const server = await serve(async (connection) => {
+            await connection.start();
+            await connection.until("audio_done");
+            connection.done();
+        });
+        let calls = 0;
+        const reserved = () => {
+            calls++;
+            throw new Error("this header is replaced, so its supplier is not needed");
+        };
+        const client = new FishAudioClient({
+            apiKey: "test-key",
+            baseUrl: server.url,
+            headers: { authorization: reserved, MODEL: reserved, "X-Extra": () => "kept" },
+        });
+
+        const events = await within(2000, collect(client.speechToText.convertRealtime({}, [pcm(1)])));
+
+        expect(events.map((event) => event.type)).toEqual(["session_started", "session_done"]);
+        expect(calls).toBe(0);
+        const connection = server.connections[0]!;
+        expect(connection.headerValues("x-extra")).toEqual(["kept"]);
+        expect(connection.headerValues("authorization")).toEqual(["Bearer test-key"]);
+        expect(connection.headerValues("model")).toEqual(["transcribe-stream-1"]);
+    });
+});
+
+describe("realtime STT audio source iterator", () => {
+    /** A hand-written audio iterator that counts what the stream does with it. */
+    function countingSource(read: (index: number) => Promise<IteratorResult<RealtimeSTTAudioInput>>) {
+        const state = { reads: 0, returns: 0 };
+        const iterator = {
+            next: () => read(state.reads++),
+            return: async (): Promise<IteratorResult<RealtimeSTTAudioInput>> => {
+                state.returns++;
+                return { done: true, value: undefined };
+            },
+        };
+        return { state, iterator, source: { [Symbol.asyncIterator]: () => iterator } };
+    }
+
+    it("uses the sync iterator when Symbol.asyncIterator is present but undefined", async () => {
+        const server = await serve(async (connection) => {
+            await connection.start();
+            await connection.until("audio_done");
+            connection.done();
+        });
+        const chunks = [pcm(1), pcm(2)];
+        const source = {
+            [Symbol.asyncIterator]: undefined,
+            [Symbol.iterator]: () => chunks[Symbol.iterator](),
+        } as unknown as Iterable<RealtimeSTTAudioInput>;
+
+        const events = await within(2000, collect(transcribe(server, source)));
+
+        expect(events.map((event) => event.type)).toEqual(["session_started", "session_done"]);
+        expect(server.connections[0]!.received.map((message) => message.type)).toEqual([
+            "config",
+            "audio",
+            "audio",
+            "audio_done",
+        ]);
+    });
+
+    it("does not read a source whose creation ended the session, and still stops it", async () => {
+        const server = await serve((connection) => connection.start().then(() => {}));
+        const controller = new AbortController();
+        const { state, iterator } = countingSource(async () => ({ done: false, value: pcm(1) }));
+        const source = {
+            [Symbol.asyncIterator]: () => {
+                controller.abort(new Error("stopped while starting the microphone"));
+                return iterator;
+            },
+        };
+
+        const { error } = await within(2000, failure(transcribe(server, source, {}, controller.signal)));
+        await sleep(30);
+
+        expect(error.message).toBe("stopped while starting the microphone");
+        expect(state).toEqual({ reads: 0, returns: 1 });
+    });
+
+    it("calls return() on a source whose read failed", async () => {
+        const server = await serve((connection) => connection.start().then(() => {}));
+        const { state, source } = countingSource(async (index) => {
+            if (index === 0) return { done: false, value: pcm(1) };
+            throw new Error("microphone unplugged");
+        });
+
+        const { error } = await within(2000, failure(transcribe(server, source)));
+        await sleep(30);
+
+        expect(error.message).toBe("microphone unplugged");
+        expect(state).toEqual({ reads: 2, returns: 1 });
+    });
+
+    it("does not call return() on a source that finished by itself", async () => {
+        const server = await serve(async (connection) => {
+            await connection.start();
+            await connection.until("audio_done");
+            connection.done();
+        });
+        const { state, source } = countingSource(async (index) =>
+            index === 0 ? { done: false, value: pcm(1) } : { done: true, value: undefined },
+        );
+
+        await within(2000, collect(transcribe(server, source)));
+        await sleep(30);
+
+        expect(state).toEqual({ reads: 2, returns: 0 });
+    });
+
+    it("an item that cannot be encoded stops the source and does not replace a waiting server error", async () => {
+        const server = await serve(async (connection) => {
+            await connection.start();
+            await connection.until("audio");
+            // The error arrives; the close frame is late.
+            connection.send(errorMessage("engine_error", 500, false));
+        });
+        const { state, source } = countingSource(async (index) => {
+            if (index === 0) return { done: false, value: pcm(1) };
+            await sleep(60);
+            return { done: false, value: { type: "configure", terms: [() => "x"] } as unknown as RealtimeSTTAudioInput };
+        });
+
+        const { error } = await within(3000, failure(transcribe(server, source)));
+
+        expect(error).toBeInstanceOf(RealtimeSTTError);
+        expect(error).toMatchObject({ errorType: "engine_error", requestId: "req_test" });
+        expect(state).toEqual({ reads: 2, returns: 1 });
+    });
+
+    it("close() still wakes a waiting reader when looking up return() throws", async () => {
+        const server = await serve((connection) => connection.start().then(() => {}));
+        const iterator = {
+            next: () => new Promise<IteratorResult<RealtimeSTTAudioInput>>(() => {}),
+            get return(): never {
+                throw new Error("broken iterator");
+            },
+        };
+        const stream = transcribe(server, { [Symbol.asyncIterator]: () => iterator });
+        await stream.next();
+        await sleep(20);
+        const pending = stream.next();
+
+        const errors = await escaped(async () => {
+            await within(700, stream.close(), "close()");
+            expect(await within(700, pending, "the pending read")).toEqual({ done: true, value: undefined });
+        });
+
+        expect(errors).toEqual([]);
+    });
+
+    it("a thrown value that cannot be turned into a string still fails the stream, not the call", async () => {
+        const thrown = Object.create(null) as object;
+        const request = {
+            get terms(): string[] {
+                throw thrown;
+            },
+        };
+
+        const stream = transcribe({ url: "http://127.0.0.1:1" }, [pcm(1)], request);
+        const error = await stream.next().catch((reason: unknown) => reason);
+
+        expect(error).toBeInstanceOf(RealtimeSTTError);
+        expect((error as RealtimeSTTError).cause).toBe(thrown);
+    });
+});
+
+// The README's "stop a microphone" example, with a recorder that can be observed.
+describe("README example: stopping a blocking audio source with an AbortSignal", () => {
+    interface Recorder {
+        read(): Promise<Uint8Array>;
+        close(): void;
+    }
+
+    // ----- copied from README.md ------------------------------------------
+    async function* microphone(openRecorder: () => Recorder, signal: AbortSignal) {
+        const recorder = openRecorder(); // your own capture code
+        try {
+            while (!signal.aborted) {
+                let stop!: () => void;
+                const aborted = new Promise<undefined>((resolve) => {
+                    stop = () => resolve(undefined);
+                });
+                signal.addEventListener("abort", stop, { once: true });
+                let chunk: Uint8Array | undefined;
+                try {
+                    // read() resolves with the next 20–40 ms of PCM.
+                    chunk = await Promise.race([recorder.read(), aborted]);
+                } finally {
+                    signal.removeEventListener("abort", stop);
+                }
+                if (chunk === undefined) {
+                    break; // aborted while waiting for audio
+                }
+                yield chunk;
+            }
+        } finally {
+            recorder.close(); // releases the device, and a read that is still pending
+        }
+    }
+    // -----------------------------------------------------------------------
+
+    /** A recorder that gives `chunks` chunks at once and then stays silent, as a muted microphone does. */
+    function fakeRecorder(chunks: number) {
+        const state = { opened: 0, closed: 0, reads: 0, mostListeners: 0, signal: undefined as AbortSignal | undefined };
+        const open = (): Recorder => {
+            state.opened++;
+            return {
+                read: () => {
+                    if (state.signal) {
+                        state.mostListeners = Math.max(
+                            state.mostListeners,
+                            getEventListeners(state.signal, "abort").length,
+                        );
+                    }
+                    return state.reads++ < chunks ? Promise.resolve(pcm(1, 32)) : new Promise<Uint8Array>(() => {});
+                },
+                close: () => {
+                    state.closed++;
+                },
+            };
+        };
+        return { state, open };
+    }
+
+    it("a session that ends before the microphone is read leaves nothing behind", async () => {
+        const server = await serve(() => {}, { refuse: { status: 401, body: '{"message":"Invalid token"}' } });
+        const recorder = fakeRecorder(0);
+        let error: unknown;
+
+        const errors = await escaped(async () => {
+            const controller = new AbortController();
+            const stream = transcribe(server, microphone(recorder.open, controller.signal));
+            try {
+                await collect(stream);
+            } catch (reason) {
+                error = reason;
+            } finally {
+                controller.abort();
+            }
+        });
+
+        expect(error).toBeInstanceOf(UnauthorizedError);
+        expect(errors).toEqual([]);
+        expect(recorder.state).toMatchObject({ opened: 0, closed: 0 });
+    });
+
+    it("a long session keeps one abort listener, and leaving the loop then abort() stops the recorder", async () => {
+        const server = await serve(async (connection) => {
+            await connection.start();
+            for (let received = 0; received < 500; received++) {
+                await connection.until("audio");
+            }
+            connection.send(committed("five hundred chunks"));
+        });
+        const recorder = fakeRecorder(500);
+        const controller = new AbortController();
+        recorder.state.signal = controller.signal;
+
+        const errors = await escaped(async () => {
+            const stream = transcribe(server, microphone(recorder.open, controller.signal));
+            try {
+                for await (const event of stream) {
+                    if (event.type === "committed") break;
+                }
+            } finally {
+                controller.abort();
+            }
+        });
+
+        expect(errors).toEqual([]);
+        // The source is still waiting for chunk 501: only the abort ends that read.
+        expect(recorder.state).toMatchObject({ opened: 1, closed: 1, reads: 501 });
+        expect(recorder.state.mostListeners).toBeLessThanOrEqual(1);
+        expect(getEventListeners(controller.signal, "abort")).toHaveLength(0);
+    });
+
+    it("without abort(), close() alone leaves a recorder that is waiting for audio open", async () => {
+        const server = await serve((connection) => connection.start().then(() => {}));
+        const recorder = fakeRecorder(0);
+        const controller = new AbortController();
+        const stream = transcribe(server, microphone(recorder.open, controller.signal));
+        await stream.next();
+        await sleep(20);
+
+        await within(700, stream.close(), "close()");
+        await sleep(30);
+        expect(recorder.state).toMatchObject({ opened: 1, closed: 0 });
+
+        controller.abort();
+        await sleep(10);
+        expect(recorder.state).toMatchObject({ opened: 1, closed: 1 });
+    });
+
+    it("abort() alone ends the audio, and the session then finishes normally", async () => {
+        const server = await serve(async (connection) => {
+            await connection.start();
+            await connection.until("audio_done");
+            connection.done();
+        });
+        const recorder = fakeRecorder(3);
+        const controller = new AbortController();
+        const stream = transcribe(server, microphone(recorder.open, controller.signal));
+        await stream.next();
+        await sleep(30);
+
+        controller.abort();
+        const events = await within(2000, collect(stream));
+
+        expect(events.map((event) => event.type)).toEqual(["session_done"]);
+        expect(recorder.state).toMatchObject({ opened: 1, closed: 1 });
+        expect(server.connections[0]!.received.map((message) => message.type)).toEqual([
+            "config",
+            "audio",
+            "audio",
+            "audio",
+            "audio_done",
+        ]);
     });
 });
