@@ -1,3 +1,8 @@
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/fishaudio/fish-audio-typescript/refs/heads/main/.github/assets/banner-dark.svg" />
+  <img alt="Fish Audio TypeScript SDK" src="https://raw.githubusercontent.com/fishaudio/fish-audio-typescript/refs/heads/main/.github/assets/banner-light.svg" />
+</picture>
+
 # Fish Audio Typescript SDK
 
 To provide convenient Typescript program integration for [https://docs.fish.audio](https://docs.fish.audio)
