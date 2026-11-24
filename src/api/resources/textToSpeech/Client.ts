@@ -6,11 +6,23 @@ import * as apiErrors from "../../../api/errors/index.js";
 import { TTSRequest } from "./requests/TTSRequest.js";
 import { serializeTtsRequest } from "./serialize.js";
 
+/**
+ * TTS model, sent as the `model` request header.
+ *
+ * - `s2.1-pro`: current flagship and the SDK default.
+ * - `s2.1-pro-free`: free tier of `s2.1-pro`.
+ * - `drama-3`: expressive model directed in plain language.
+ * - `s2-pro`: previous generation.
+ * - `s1`: deprecated, retires on 2026-12-31. Use `s2.1-pro` instead.
+ *
+ * Any other string is accepted so newly released models work without an SDK update.
+ */
 export type Backends =
     | 's1'
     | 's2-pro'
     | 's2.1-pro'
     | 's2.1-pro-free'
+    | 'drama-3'
     | (string & {});
 
 export declare namespace TextToSpeech {
