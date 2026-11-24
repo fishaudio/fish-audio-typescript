@@ -1,6 +1,6 @@
 import WebSocket from "ws";
 import { decode, encode } from "@msgpack/msgpack";
-import type { IncomingMessage } from "node:http";
+import type { ClientRequest, IncomingMessage } from "node:http";
 import { types } from "node:util";
 import * as apiErrors from "../../api/errors/index.js";
 import { FishAudioError } from "../../errors/FishAudioError.js";
@@ -135,6 +135,16 @@ export function decodeServerEvent(frame: Uint8Array): RealtimeSTTEvent | undefin
  * @remarks
  * **Node.js only**: uses the `ws` package, like the realtime text-to-speech client.
  *
+ * **Stopping the audio source**: whenever the session ends (`close()`, leaving
+ * the loop, an error, an abort, `session_done`), the stream calls `return()` on
+ * the audio source's iterator once, and does not wait for it. An iterator whose
+ * `return()` releases a pending read stops at once. An async generator cannot:
+ * its `return()` only runs after the `await` it is suspended on settles, so a
+ * generator blocked on a read that never completes stays blocked, and its
+ * `finally` block does not run. To stop such a source, end what it is waiting
+ * for yourself (stop the recorder, destroy the stream it reads, or abort a
+ * signal the generator races its read against) when you close the session.
+ *
  * @example
  * ```typescript
  * const stream = client.speechToText.convertRealtime({ drafts: true, diarize: false }, microphone());
@@ -166,6 +176,8 @@ export class RealtimeSTTStream implements AsyncIterableIterator<RealtimeSTTEvent
     /** `server_restarting`, when it is the last message before the server closes. */
     #restarting: RealtimeSTTErrorEvent | undefined;
     readonly #connectTimeoutMs: number;
+    /** The audio source's iterator while it may still need to be stopped. */
+    #audioIterator: Iterator<unknown> | AsyncIterator<unknown> | undefined;
 
     readonly #abortSignal: AbortSignal | undefined;
     readonly #onAbort = (): void => {
@@ -187,8 +199,17 @@ export class RealtimeSTTStream implements AsyncIterableIterator<RealtimeSTTEvent
             this.#end(this.#abortSignal.reason);
             return;
         }
+        let config: Uint8Array;
+        try {
+            // Before anything is opened, so a config that cannot be encoded
+            // fails the stream instead of throwing inside a socket callback.
+            config = encodeClientMessage(buildConfigMessage(params.request));
+        } catch (error) {
+            this.#end(encodingError("the session config", error));
+            return;
+        }
         this.#abortSignal?.addEventListener("abort", this.#onAbort, { once: true });
-        void this.#open(params.connect, buildConfigMessage(params.request));
+        void this.#open(params.connect, config);
         void this.#sendAudio(params.audio);
     }
 
@@ -269,12 +290,19 @@ export class RealtimeSTTStream implements AsyncIterableIterator<RealtimeSTTEvent
     /**
      * Sends a control message. Resolves once it is handed to the connection.
      *
-     * @throws {RealtimeSTTError} If the session has ended.
+     * @throws {RealtimeSTTError} If the session has ended, or the message
+     * cannot be encoded as MessagePack (the session then goes on).
      */
     public async send(message: RealtimeSTTControlMessage): Promise<void> {
+        let frame: Uint8Array;
+        try {
+            frame = encodeClientMessage(message);
+        } catch (error) {
+            throw encodingError("the message", error);
+        }
         try {
             await this.#configSent.promise;
-            await this.#sendFrame(message);
+            await this.#sendFrame(frame);
         } catch {
             throw new RealtimeSTTError({ message: "The realtime session is closed." });
         }
@@ -284,6 +312,10 @@ export class RealtimeSTTStream implements AsyncIterableIterator<RealtimeSTTEvent
      * Ends the session and closes the connection. Events not read yet are
      * dropped, and a pending or later read reports the end of the stream.
      * Safe to call more than once.
+     *
+     * The audio source is told to stop through its iterator's `return()`, which
+     * is not awaited: `close()` resolves when the connection is closed, whatever
+     * the source does. See the class remarks for sources that `return()` cannot stop.
      */
     public async close(): Promise<void> {
         this.#events.length = 0;
@@ -301,7 +333,7 @@ export class RealtimeSTTStream implements AsyncIterableIterator<RealtimeSTTEvent
 
     // ----- connection ------------------------------------------------------
 
-    async #open(connect: () => Promise<RealtimeSTTConnectParams>, config: Record<string, unknown>): Promise<void> {
+    async #open(connect: () => Promise<RealtimeSTTConnectParams>, config: Uint8Array): Promise<void> {
         let params: RealtimeSTTConnectParams;
         try {
             params = await connect();
@@ -328,37 +360,79 @@ export class RealtimeSTTStream implements AsyncIterableIterator<RealtimeSTTEvent
         }
         this.#websocket = websocket;
 
-        websocket.on("open", () => {
-            websocket.send(encodeClientMessage(config), (error) => {
-                if (error) {
-                    this.#end(connectionError("Could not start the realtime session", error));
-                } else {
-                    this.#configSent.resolve();
+        // A handler that throws would throw out of the socket's event emitter,
+        // past the stream and into the process, so each one is guarded.
+        websocket.on(
+            "open",
+            this.#guarded(() => {
+                websocket.send(
+                    config,
+                    this.#guarded((error?: Error | null) => {
+                        if (error) {
+                            this.#end(connectionError("Could not start the realtime session", error));
+                        } else {
+                            this.#configSent.resolve();
+                        }
+                    }),
+                );
+            }),
+        );
+        websocket.on(
+            "message",
+            this.#guarded((data: WebSocket.RawData, isBinary: boolean) => {
+                if (this.#ended || !isBinary) {
+                    return;
                 }
-            });
-        });
-        websocket.on("message", (data, isBinary) => {
-            if (this.#ended || !isBinary) {
-                return;
+                const event = decodeServerEvent(toBytes(data));
+                if (event !== undefined) {
+                    this.#receive(event);
+                }
+            }),
+        );
+        websocket.on(
+            "unexpected-response",
+            this.#guarded((request: ClientRequest, response: IncomingMessage) => {
+                void readRefusalBody(response).then(
+                    this.#guarded((body: unknown) => {
+                        request.destroy();
+                        this.#end(handshakeError(response.statusCode ?? 0, body));
+                    }),
+                );
+            }),
+        );
+        websocket.on(
+            "error",
+            this.#guarded((error: Error) => {
+                this.#end(connectionError("The realtime connection failed", error));
+            }),
+        );
+        websocket.on(
+            "close",
+            this.#guarded((code: number, reason: Buffer) => {
+                clearTimeout(this.#closeTimer);
+                this.#onClose(code, reason.toString());
+            }),
+        );
+    }
+
+    /**
+     * Wraps a callback that runs outside the stream's own promises (socket
+     * events, send callbacks): if it throws, the session ends with that error
+     * instead of the exception escaping to the process.
+     */
+    #guarded<Args extends unknown[]>(callback: (...args: Args) => void): (...args: Args) => void {
+        return (...args) => {
+            try {
+                callback(...args);
+            } catch (error) {
+                this.#end(
+                    new RealtimeSTTError({
+                        message: `The realtime session failed unexpectedly: ${toError(error).message}`,
+                        cause: error,
+                    }),
+                );
             }
-            const event = decodeServerEvent(toBytes(data));
-            if (event !== undefined) {
-                this.#receive(event);
-            }
-        });
-        websocket.on("unexpected-response", (request, response) => {
-            void readRefusalBody(response).then((body) => {
-                request.destroy();
-                this.#end(handshakeError(response.statusCode ?? 0, body));
-            });
-        });
-        websocket.on("error", (error) => {
-            this.#end(connectionError("The realtime connection failed", error));
-        });
-        websocket.on("close", (code, reason) => {
-            clearTimeout(this.#closeTimer);
-            this.#onClose(code, reason.toString());
-        });
+        };
     }
 
     #receive(event: RealtimeSTTEvent): void {
@@ -463,7 +537,12 @@ export class RealtimeSTTStream implements AsyncIterableIterator<RealtimeSTTEvent
         this.#abortSignal?.removeEventListener("abort", this.#onAbort);
         this.#configSent.reject();
         this.#sessionStarted.reject();
-        this.#closeWebSocket();
+        try {
+            this.#closeWebSocket();
+        } catch {
+            // The connection is being discarded anyway; readers must still be woken.
+        }
+        this.#stopAudio();
 
         for (const waiter of this.#waiters.splice(0)) {
             if (this.#hasError) {
@@ -520,15 +599,33 @@ export class RealtimeSTTStream implements AsyncIterableIterator<RealtimeSTTEvent
             return;
         }
         try {
-            for await (const item of audio) {
-                if (this.#ended) {
-                    // Leaving the loop closes the audio source if it is a generator.
+            // Iterated by hand, not with `for await`: the session must be able
+            // to call return() while a read is pending (see #stopAudio).
+            const iterator: Iterator<RealtimeSTTAudioInput> | AsyncIterator<RealtimeSTTAudioInput> =
+                Symbol.asyncIterator in audio ? audio[Symbol.asyncIterator]() : audio[Symbol.iterator]();
+            this.#audioIterator = iterator;
+            for (;;) {
+                const result = await iterator.next();
+                if (result.done) {
+                    // The source finished by itself: nothing left to stop.
+                    this.#audioIterator = undefined;
                     break;
                 }
-                await this.#sendFrame(isBytes(item) ? { type: "audio", data: toUint8Array(item) } : item);
+                if (this.#ended) {
+                    return;
+                }
+                const item = await result.value;
+                let frame: Uint8Array;
+                try {
+                    frame = encodeClientMessage(isBytes(item) ? { type: "audio", data: toUint8Array(item) } : item);
+                } catch (error) {
+                    this.#end(encodingError("an item of the audio stream", error));
+                    return;
+                }
+                await this.#sendFrame(frame);
             }
             if (!this.#ended) {
-                await this.#sendFrame({ type: "audio_done" });
+                await this.#sendFrame(AUDIO_DONE);
             }
         } catch (error) {
             if (error instanceof SendFailed) {
@@ -541,18 +638,41 @@ export class RealtimeSTTStream implements AsyncIterableIterator<RealtimeSTTEvent
                 return;
             }
             // The audio source failed: the session ends with its error.
+            this.#audioIterator = undefined;
             this.#end(error);
+        } finally {
+            // However the sender stopped, the source is not left running.
+            this.#stopAudio();
         }
     }
 
-    #sendFrame(message: Record<string, unknown> | RealtimeSTTControlMessage): Promise<void> {
+    /**
+     * Tells the audio source to stop, once, by calling its iterator's
+     * `return()`. Not awaited: a source whose `return()` never settles (or an
+     * async generator suspended on a read that never completes) must not hold
+     * up the session's shutdown. A failing `return()` is ignored.
+     */
+    #stopAudio(): void {
+        const iterator = this.#audioIterator;
+        this.#audioIterator = undefined;
+        if (iterator === undefined || typeof iterator.return !== "function") {
+            return;
+        }
+        try {
+            void Promise.resolve(iterator.return()).catch(() => {});
+        } catch {
+            // Cleanup of the caller's source must not fail the session.
+        }
+    }
+
+    #sendFrame(frame: Uint8Array): Promise<void> {
         return new Promise((resolve, reject) => {
             const websocket = this.#websocket;
             if (this.#ended || websocket === undefined || websocket.readyState !== WebSocket.OPEN) {
                 reject(new SendFailed());
                 return;
             }
-            websocket.send(encodeClientMessage(message), (error) => {
+            websocket.send(frame, (error) => {
                 if (error) {
                     reject(new SendFailed());
                 } else {
@@ -562,6 +682,8 @@ export class RealtimeSTTStream implements AsyncIterableIterator<RealtimeSTTEvent
         });
     }
 }
+
+const AUDIO_DONE = encodeClientMessage({ type: "audio_done" });
 
 class SendFailed extends Error {}
 
@@ -579,6 +701,13 @@ function deferred(): { promise: Promise<void>; resolve: () => void; reject: () =
 
 function toError(value: unknown): Error {
     return value instanceof Error ? value : new Error(String(value));
+}
+
+function encodingError(what: string, cause: unknown): RealtimeSTTError {
+    return new RealtimeSTTError({
+        message: `Could not encode ${what} as MessagePack: ${toError(cause).message}`,
+        cause,
+    });
 }
 
 function connectionError(prefix: string, cause: Error): RealtimeSTTError {

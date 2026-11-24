@@ -203,6 +203,29 @@ for await (const event of stream) {
 
 The session ends with a `session_done` event once the audio source is exhausted. Leaving the loop early, or calling `stream.close()`, closes the connection.
 
+When the session ends for any reason, the stream calls `return()` on the audio source's iterator and does not wait for it, so `close()` never hangs on the source. An async generator that is suspended on a read cannot be interrupted this way: its `return()` only runs after that read settles. If your source can block, such as a microphone, stop it yourself when you close the session, for example by racing its read against an `AbortSignal`:
+
+```typescript
+const controller = new AbortController();
+const stopped = new Promise<never>((_, reject) => {
+    controller.signal.addEventListener("abort", () => reject(controller.signal.reason));
+});
+
+async function* microphone() {
+    for (;;) {
+        // readChunk() is your own capture code; it resolves with the next 20–40 ms of PCM.
+        yield await Promise.race([readChunk(), stopped]);
+    }
+}
+
+// The same signal ends the session, so one abort() stops both.
+const stream = fishAudio.speechToText.convertRealtime({ diarize: false }, microphone(), {
+    abortSignal: controller.signal,
+});
+```
+
+`controller.abort()` then ends the session and the generator together; the loop over `stream` throws the abort reason. To end it without an error, call `stream.close()` first and `controller.abort()` after it.
+
 The stream also sends control messages while the session runs:
 
 ```typescript

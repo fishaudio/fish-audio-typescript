@@ -719,6 +719,87 @@ describe("realtime STT errors", () => {
     });
 });
 
+describe("realtime STT messages that cannot be encoded", () => {
+    /** Collects errors that escape to the process instead of reaching the stream. */
+    async function escaped(run: () => Promise<void>): Promise<unknown[]> {
+        const errors: unknown[] = [];
+        const onError = (error: unknown) => errors.push(error);
+        process.on("uncaughtException", onError);
+        process.on("unhandledRejection", onError);
+        try {
+            await run();
+            await sleep(30);
+        } finally {
+            process.off("uncaughtException", onError);
+            process.off("unhandledRejection", onError);
+        }
+        return errors;
+    }
+
+    // MessagePack has no encoding for a function.
+    const unencodable = [() => "Fish Audio"] as unknown as string[];
+
+    it("a config that cannot be encoded rejects a pending read with RealtimeSTTError", async () => {
+        const server = await serve((connection) => connection.start().then(() => {}));
+        let error: any;
+
+        const errors = await escaped(async () => {
+            const stream = transcribe(server, [pcm(1)], { terms: unencodable });
+            const pending = stream.next();
+            error = await within(1000, pending, "the pending read").catch((reason) => reason);
+            expect(await stream.next()).toEqual({ done: true, value: undefined });
+            await expect(stream.keepalive()).rejects.toBeInstanceOf(RealtimeSTTError);
+        });
+
+        expect(error).toBeInstanceOf(RealtimeSTTError);
+        expect(error.message).toMatch(/config/);
+        expect(error.cause).toBeInstanceOf(Error);
+        expect(errors).toEqual([]);
+        // Nothing was sent: either no connection, or one that was closed again.
+        for (const connection of server.connections) {
+            expect(connection.received).toEqual([]);
+        }
+    });
+
+    it("a control message that cannot be encoded rejects that call and the session goes on", async () => {
+        const server = await serve(async (connection) => {
+            await connection.start();
+            await connection.until("keepalive");
+            connection.done();
+        });
+        const stream = transcribe(server, silentMicrophone());
+        let error: any;
+
+        const errors = await escaped(async () => {
+            error = await stream.configure({ context: { terms: unencodable } }).catch((reason) => reason);
+            await stream.keepalive();
+        });
+
+        expect(error).toBeInstanceOf(RealtimeSTTError);
+        expect(error.message).toMatch(/encode/);
+        expect(error.message).not.toMatch(/closed/);
+        expect(errors).toEqual([]);
+        const events = await collect(stream);
+        expect(events.map((event) => event.type)).toEqual(["session_started", "session_done"]);
+        expect(server.connections[0]!.received.map((message) => message.type)).toEqual(["config", "keepalive"]);
+    });
+
+    it("an item of the audio stream that cannot be encoded ends the session with RealtimeSTTError", async () => {
+        const server = await serve((connection) => connection.start().then(() => {}));
+        const bad = { type: "configure", context: { terms: unencodable } } as const;
+        let result: any;
+
+        const errors = await escaped(async () => {
+            result = await within(2000, failure(transcribe(server, [pcm(1), bad, pcm(2)])));
+        });
+
+        expect(result.error).toBeInstanceOf(RealtimeSTTError);
+        expect(result.error.message).toMatch(/encode/);
+        expect(errors).toEqual([]);
+        expect(await within(2000, server.connections[0]!.closed)).toBe(1000);
+    });
+});
+
 describe("realtime STT audio source failures", () => {
     class MicrophoneError extends Error {}
 
@@ -912,6 +993,140 @@ describe("realtime STT closing", () => {
         await sleep(30);
         expect(connection.received).toHaveLength(sent);
         expect(connection.received.map((message) => message.type)).not.toContain("audio_done");
+    });
+
+    /**
+     * An audio source that waits for its next chunk like a blocked microphone
+     * read. Unlike an async generator, its `return()` can release that read.
+     */
+    function interruptibleMicrophone(options: { returnResult?: () => Promise<IteratorResult<Uint8Array>> } = {}) {
+        const state = { reads: 0, returns: 0, pendingReadSettled: false };
+        let release: ((result: IteratorResult<Uint8Array>) => void) | undefined;
+        const source: AsyncIterable<Uint8Array> = {
+            [Symbol.asyncIterator]: () => ({
+                next() {
+                    state.reads++;
+                    if (state.reads === 1) {
+                        return Promise.resolve({ done: false, value: pcm(1) });
+                    }
+                    return new Promise<IteratorResult<Uint8Array>>((resolve) => {
+                        release = (result) => {
+                            state.pendingReadSettled = true;
+                            resolve(result);
+                        };
+                    });
+                },
+                return() {
+                    state.returns++;
+                    release?.({ done: true, value: undefined });
+                    return options.returnResult?.() ?? Promise.resolve({ done: true, value: undefined });
+                },
+            }),
+        };
+        return { source, state };
+    }
+
+    it("close() calls return() on an audio source that is waiting for its next chunk", async () => {
+        const server = await serve(async (connection) => {
+            await connection.start();
+            await connection.until("audio");
+            connection.send(committed("heard it"));
+        });
+        const { source, state } = interruptibleMicrophone();
+        const stream = transcribe(server, source);
+        await stream.next();
+        expect((await stream.next()).value.type).toBe("committed");
+        expect(state.reads).toBe(2);
+
+        await within(700, stream.close(), "close()");
+
+        expect(state.returns).toBe(1);
+        expect(state.pendingReadSettled).toBe(true);
+        await sleep(30);
+        expect(state.reads).toBe(2);
+        expect(state.returns).toBe(1);
+        expect(server.connections[0]!.received.map((message) => message.type)).toEqual(["config", "audio"]);
+    });
+
+    it.each([
+        ["the server ends the session", (connection: FakeConnection) => connection.done()],
+        ["the server reports an unrecoverable error", (connection: FakeConnection) => {
+            connection.send(errorMessage("engine_error", 500, false));
+            connection.socket.close(4500);
+        }],
+        ["the connection drops", (connection: FakeConnection) => connection.socket.terminate()],
+    ])("return() is also called on a waiting audio source when %s", async (_name, endSession) => {
+        const server = await serve(async (connection) => {
+            await connection.start();
+            await connection.until("audio");
+            endSession(connection);
+        });
+        const { source, state } = interruptibleMicrophone();
+
+        await within(2000, collect(transcribe(server, source)).catch(() => {}));
+        await sleep(30);
+
+        expect(state.returns).toBe(1);
+        expect(state.pendingReadSettled).toBe(true);
+    });
+
+    it("close() does not wait for an audio source that cannot be interrupted", async () => {
+        const server = await serve(async (connection) => {
+            await connection.start();
+            await connection.until("audio");
+            connection.send(committed("heard it"));
+        });
+        let finished = false;
+        // An async generator: return() only runs once the pending await settles.
+        async function* blockedMicrophone(): AsyncGenerator<Uint8Array> {
+            try {
+                yield pcm(1);
+                await new Promise(() => {});
+            } finally {
+                finished = true;
+            }
+        }
+        const stream = transcribe(server, blockedMicrophone());
+        await stream.next();
+        await stream.next();
+
+        await within(700, stream.close(), "close()");
+
+        expect(await stream.next()).toEqual({ done: true, value: undefined });
+        expect(await within(2000, server.connections[0]!.closed)).toBe(1000);
+        expect(finished).toBe(false);
+    });
+
+    it.each([
+        ["never settles", () => new Promise<IteratorResult<Uint8Array>>(() => {})],
+        ["rejects", () => Promise.reject(new Error("cleanup failed"))],
+        ["throws", (): Promise<IteratorResult<Uint8Array>> => {
+            throw new Error("cleanup failed");
+        }],
+    ])("close() is not held up or failed by a return() that %s", async (_name, returnResult) => {
+        const server = await serve(async (connection) => {
+            await connection.start();
+            await connection.until("audio");
+            connection.send(committed("heard it"));
+        });
+        const unhandled: unknown[] = [];
+        const onUnhandled = (reason: unknown) => unhandled.push(reason);
+        process.on("unhandledRejection", onUnhandled);
+        try {
+            const { source, state } = interruptibleMicrophone({ returnResult });
+            const stream = transcribe(server, source);
+            await stream.next();
+            await stream.next();
+
+            await within(700, stream.close(), "close()");
+
+            expect(state.returns).toBe(1);
+            expect(await stream.next()).toEqual({ done: true, value: undefined });
+            await sleep(30);
+            expect(unhandled).toEqual([]);
+        } finally {
+            process.off("unhandledRejection", onUnhandled);
+        }
     });
 
     it("the connection is closed by the time session_done is returned", async () => {

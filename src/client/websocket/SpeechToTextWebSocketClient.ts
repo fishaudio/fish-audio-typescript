@@ -27,6 +27,9 @@ export class SpeechToTextWebSocket extends SpeechToText {
      * @param audioStream - Chunks of PCM audio (`Buffer`, a typed array or `ArrayBuffer`). A control message such as
      * `{ type: "agent_speaking", speaking: true }` in the stream is sent at that position.
      * @param requestOptions - Request-specific configuration.
+     * When the session ends, the stream calls `return()` on this source's iterator without
+     * waiting for it. An async generator suspended on a read is not interrupted by that; see
+     * {@link RealtimeSTTStream} for how to stop such a source.
      * @returns The session: iterate it for events, call its methods to send control messages.
      *
      * @remarks
