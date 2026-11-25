@@ -26,7 +26,8 @@ export declare namespace FishAudioClient {
          * `headers` above and per-call `requestOptions.headers` win over it; an
          * error it throws fails the call unchanged. Do not return `traceparent`
          * when `@opentelemetry/instrumentation-undici` is active: it adds its own,
-         * and two make the API start a new trace. See the README's "Tracing".
+         * and two make the API start a new trace. For OpenTelemetry without HTTP
+         * instrumentation, use `openTelemetryHeaders(api)`. See the README's "Tracing".
          */
         headerProvider?: HeaderProvider;
     }

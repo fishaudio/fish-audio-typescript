@@ -359,23 +359,27 @@ in the call's async context. It takes no arguments, so read your current span or
 request inside it (`AsyncLocalStorage` works), and returns the headers to add, or
 `undefined`. It must be synchronous.
 
-**OpenTelemetry.** With `@opentelemetry/auto-instrumentations-node` (undici covers
-`fetch`, http covers the WebSocket handshakes), every SDK request already carries
-`traceparent`: you need nothing here, and **must not** return `traceparent` from a
-`headerProvider`, because the undici instrumentation adds its own next to it and a
-request with two makes the API start a new trace. Without that instrumentation:
+**OpenTelemetry.** Which one to use:
+
+- **You run `@opentelemetry/auto-instrumentations-node`** (or the undici and http
+  instrumentations): you need nothing. Undici covers `fetch`, http covers both
+  WebSocket handshakes, and each request carries one `traceparent` from a client span
+  of your current span. **Do not add `openTelemetryHeaders` as well**: the undici
+  instrumentation appends its own `traceparent` instead of replacing it, and Fish
+  Audio treats a request with two as having none and starts a new trace.
+- **You use OpenTelemetry without HTTP instrumentation**: add one line. The SDK does
+  not import `@opentelemetry/api`; you pass it in.
 
 ```typescript
-import { context, propagation } from "@opentelemetry/api";
+import * as otel from "@opentelemetry/api";
+import { FishAudioClient, openTelemetryHeaders } from "fish-audio";
 
-const fishAudio = new FishAudioClient({
-    headerProvider: () => {
-        const carrier: Record<string, string> = {};
-        propagation.inject(context.active(), carrier); // the active span's traceparent
-        return carrier;
-    },
-});
+const fishAudio = new FishAudioClient({ headerProvider: openTelemetryHeaders(otel) });
 ```
+
+With it, the SDK sends the current trace ID to Fish Audio in a `traceparent` header
+so you can find your requests in Fish Audio's traces. It sends no other trace data
+(no `baggage`, no `tracestate`). To turn this off, leave out `headerProvider`.
 
 **Your own trace IDs.** The API accepts only a valid `traceparent` (version `00`:
 32 hex digits of trace ID, 16 of parent ID, 2 of flags). Convert your IDs; an
