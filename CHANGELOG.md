@@ -8,6 +8,7 @@ This project follows [Semantic Versioning](https://semver.org/). Before 1.0, a m
 ### Changed
 
 - **The licence is now Apache-2.0.** `package.json` states `"license": "Apache-2.0"` and the repository and the npm package contain a `LICENSE` file with the Apache License 2.0 text. Versions 0.1.0 and 0.2.0 were published with `"license": "MIT"` in their metadata and without a `LICENSE` file.
+- **The SDK identifies itself as `fish-audio-typescript/<version>`.** Every HTTP request and the handshakes of the TTS and realtime speech-to-text WebSockets send `User-Agent: fish-audio-typescript/<version>`, the format all Fish Audio SDKs use. Before, HTTP requests and the realtime speech-to-text handshake sent `fish-audio` and the TTS handshake sent none. A `User-Agent` you set in the client's or a request's `headers` is appended after it (`fish-audio-typescript/0.2.1 my-app/1.0`) instead of replacing it. In a browser the SDK sets no `User-Agent`: browsers send their own, and the API's CORS rules do not allow a page to set one.
 
 ## [0.2.0] - 2026-11-25
 

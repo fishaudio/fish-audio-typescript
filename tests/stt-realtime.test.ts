@@ -22,6 +22,7 @@ import {
 } from "../src/client/websocket/RealtimeSTTStream.js";
 import { encode } from "@msgpack/msgpack";
 import { startRealtimeServer, type FakeConnection, type FakeServer, type Message } from "./realtimeServer.js";
+import { SDK_USER_AGENT } from "../src/core/userAgent.js";
 
 const servers: FakeServer[] = [];
 
@@ -344,7 +345,7 @@ describe("realtime STT session", () => {
         expect(connection.headerValues("x-gateway-token")).toEqual(["gateway-secret"]);
         expect(connection.headerValues("x-from-supplier")).toEqual(["supplied"]);
         expect(connection.headerValues("x-removed")).toEqual([]);
-        expect(connection.headerValues("user-agent")).toEqual(["fish-audio"]);
+        expect(connection.headerValues("user-agent")).toEqual([SDK_USER_AGENT]);
         expect(connection.headerValues("authorization")).toEqual(["Bearer test-key"]);
         expect(connection.headerValues("model")).toEqual(["transcribe-stream-1"]);
     });
