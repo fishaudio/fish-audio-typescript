@@ -21,7 +21,7 @@ import { FishAudioClient } from "../src/index.js";
 
 const DEFAULT_MODEL = "s2.1-pro";
 // `satisfies` keeps this list in sync with the Backends union at type-check time.
-const MODELS = ["s2.1-pro", "s2.1-pro-free", "drama-3", "s2-pro", "s1"] as const satisfies readonly Backends[];
+const MODELS = ["s2.1-pro", "s2.1-pro-free", "drama-3", "s3-pro", "s2-pro", "s1"] as const satisfies readonly Backends[];
 
 function stubFetch() {
     const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => new Response(Uint8Array.of(1, 2, 3)));

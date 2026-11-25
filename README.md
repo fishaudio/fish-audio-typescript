@@ -43,6 +43,7 @@ const fishAudio = new FishAudioClient({apiKey: "your_api_key", baseUrl: "https:/
 | `s2.1-pro` | Current flagship (default) |
 | `s2.1-pro-free` | Free tier of `s2.1-pro` |
 | `drama-3` | Expressive model you direct in plain language |
+| `s3-pro` | S3 Pro |
 | `s2-pro` | Previous generation |
 | `s1` | Deprecated, retires on 2026-12-31 |
 

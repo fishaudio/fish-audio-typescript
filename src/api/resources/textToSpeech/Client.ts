@@ -12,6 +12,7 @@ import { serializeTtsRequest } from "./serialize.js";
  * - `s2.1-pro`: current flagship and the SDK default.
  * - `s2.1-pro-free`: free tier of `s2.1-pro`.
  * - `drama-3`: expressive model directed in plain language.
+ * - `s3-pro`: S3 Pro.
  * - `s2-pro`: previous generation.
  * - `s1`: deprecated, retires on 2026-12-31. Use `s2.1-pro` instead.
  *
@@ -23,6 +24,7 @@ export type Backends =
     | 's2.1-pro'
     | 's2.1-pro-free'
     | 'drama-3'
+    | 's3-pro'
     | (string & {});
 
 export declare namespace TextToSpeech {
