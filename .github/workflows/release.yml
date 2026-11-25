@@ -108,41 +108,50 @@ jobs:
           VERSION="$(node -p "require('./package.json').version")"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           case "$VERSION" in
-            *-*) echo "prerelease=true" >> "$GITHUB_OUTPUT" ;;
-            *) echo "prerelease=false" >> "$GITHUB_OUTPUT" ;;
+            *-*) echo "tag=next" >> "$GITHUB_OUTPUT" ;;
+            *) echo "tag=latest" >> "$GITHUB_OUTPUT" ;;
           esac
+
+      # A stable version goes to "latest", a version such as 1.0.0-beta.1 to
+      # "next". A late or retried run of an older release must not move that
+      # tag backwards, so the job stops unless the version is higher than the
+      # one the tag points to now, and also when it cannot read the tags.
+      # npm's own check is not enough: it covers only the implicit "latest",
+      # leaves deprecated versions out, and is skipped when its registry read
+      # fails.
+      - name: Check that the dist-tag would not move backwards
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          if ! DIST_TAGS="$(npm view fish-audio dist-tags --json)"; then
+            echo "::error::Could not read the dist-tags of fish-audio from the registry. Nothing was published."
+            exit 1
+          fi
+          # npm's own copy of semver.
+          SEMVER="$(npm root -g)/npm/node_modules/semver"
+          export DIST_TAGS SEMVER
+          node -e '
+            const semver = require(process.env.SEMVER);
+            const { VERSION, TAG } = process.env;
+            const current = JSON.parse(process.env.DIST_TAGS)[TAG];
+            if (current && semver.gte(current, VERSION)) {
+              console.log(`::error::The "${TAG}" dist-tag is at ${current}. Publishing ${VERSION} would not move it forwards. Nothing was published.`);
+              process.exit(1);
+            }
+            console.log(`"${TAG}" is at ${current ?? "(not set)"}; publishing ${VERSION}.`);
+          '
 
       # No NODE_AUTH_TOKEN in the publish steps: npm exchanges the job's OIDC
       # token itself.
 
-      # A stable version gets npm's default dist-tag handling: no --tag. npm
-      # then refuses a version lower than the current "latest", so a late or
-      # retried run of an older release cannot move "latest" backwards. An
-      # explicit "--tag latest" would switch that check off.
+      # No --tag for a stable version, so that npm's check for the implicit
+      # "latest" stays on as a second safeguard. "--tag latest" switches it off.
       - name: Publish a stable version
-        if: steps.version.outputs.prerelease == 'false'
+        if: steps.version.outputs.tag == 'latest'
         run: npm publish --provenance --access public
 
-      # A version such as 1.0.0-beta.1 goes to "next". npm requires an explicit
-      # tag for it and does not compare versions for an explicit tag, so this
-      # step makes the same check for "next" itself.
-      - name: Check that "next" would not move backwards
-        if: steps.version.outputs.prerelease == 'true'
-        env:
-          VERSION: ${{ steps.version.outputs.version }}
-        run: |
-          CURRENT="$(npm view fish-audio dist-tags.next)"
-          if [ -z "$CURRENT" ]; then
-            exit 0
-          fi
-          # npm's own copy of semver.
-          SEMVER="$(npm root -g)/npm/node_modules/semver"
-          export SEMVER CURRENT
-          if node -e 'process.exit(require(process.env.SEMVER).gt(process.env.CURRENT, process.env.VERSION) ? 0 : 1)'; then
-            echo "::error::The 'next' dist-tag is at $CURRENT, which is higher than $VERSION. Publishing $VERSION would move 'next' backwards."
-            exit 1
-          fi
-
+      # npm requires an explicit tag for a pre-release version.
       - name: Publish a pre-release version
-        if: steps.version.outputs.prerelease == 'true'
+        if: steps.version.outputs.tag == 'next'
         run: npm publish --provenance --access public --tag next

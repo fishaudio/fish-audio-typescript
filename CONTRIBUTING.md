@@ -34,14 +34,15 @@ A release is published to npm by the `Release` workflow (`.github/workflows/rele
 
 ### Which dist-tag a version gets
 
-- A stable version, such as `1.2.0`, is published without `--tag`. npm gives it `latest`, and refuses the publish if the version is lower than the current `latest`. The workflow therefore cannot move `latest` backwards.
-- A version with a pre-release part, such as `1.0.0-beta.1`, is published with `--tag next`. The workflow stops before publishing if `next` already points to a higher version.
-- A stable version lower than `latest`, such as a patch for an older minor, is not published by this workflow: the publish job fails with npm's message that it cannot apply `latest` implicitly. A package owner publishes it by hand with a tag of its own, for example `npm publish --tag release-1.1`.
+- A stable version, such as `1.2.0`, is published without `--tag`, and npm gives it `latest`.
+- A version with a pre-release part, such as `1.0.0-beta.1`, is published with `--tag next`.
+- Before publishing, the workflow reads the dist-tags from the registry. It stops if the tag already points to the same or a higher version, or if it cannot read the tags. The workflow therefore cannot move `latest` or `next` backwards.
+- A stable version lower than `latest`, such as a patch for an older minor, is not published by this workflow: the publish job stops at that check. A package owner publishes it by hand with a tag of its own, for example `npm publish --tag release-1.1`.
 
 ### Several releases, re-runs and failures
 
 - Releases run one at a time, in the order their GitHub Releases were published. A release that is waiting is not dropped when another one is started, and a rehearsal never takes the place of a waiting release.
-- Publish versions in ascending order. If `1.2.1` is released before `1.2.0`, the run for `1.2.0` fails as described above.
+- Publish versions in ascending order. If `1.2.1` is released before `1.2.0`, the run for `1.2.0` stops at the dist-tag check.
 - If a job fails for a reason outside the code (a network error, an approval that timed out), re-run the failed jobs. Nothing is uploaded before the last step of the publish job, and that step either publishes the whole version or nothing.
 - If the code or the workflow must change, the existing tag cannot be reused as it is: a re-run uses the tagged commit and its copy of the workflow. As long as the version is not on npm, delete the GitHub Release and its tag, merge the fix, and create the release again. This starts a new run.
 
@@ -49,7 +50,7 @@ A release is published to npm by the `Release` workflow (`.github/workflows/rele
     gh release delete vX.Y.Z --cleanup-tag
     ```
 
-- A version that is on npm cannot be published again. Re-running its release, or creating a GitHub Release for a version that was published by hand, fails with `You cannot publish over the previously published versions`. That failure changes nothing on npm. To change a published version, release a new one.
+- A version that is on npm cannot be published again. Re-running its release, or creating a GitHub Release for a version that was published by hand, stops at the dist-tag check. That failure changes nothing on npm. To change a published version, release a new one.
 - If a GitHub Release exists but its version is not on npm, the publish did not happen. Open the workflow run of that release to see why, then follow the two cases above.
 
 ### One-time setup: npm Trusted Publisher
@@ -62,6 +63,9 @@ An owner of the npm package sets this once, on npmjs.com under `fish-audio` → 
 | Repository | `fish-audio-typescript` |
 | Workflow filename | `release.yml` |
 | Environment name | `npm` |
+| Allowed actions | allow `npm publish` |
+
+**Allowed actions** matters: a Trusted Publisher created after 3 September 2026 allows only `npm stage publish` unless `npm publish` is also allowed, and this workflow runs `npm publish`. `npm dist-tag` is not needed.
 
 The values are case-sensitive, and npm does not check them when they are saved; a mistake shows up as an authentication error on the first publish. npm also expects the first publish within two days of saving the configuration, so set it up shortly before a release.
 
