@@ -3,7 +3,7 @@
 All notable changes to the `fish-audio` npm package are listed here.
 This project follows [Semantic Versioning](https://semver.org/). Before 1.0, a minor version may contain breaking changes; they are listed under "Upgrade notes".
 
-## [0.2.0] - 2026-11-24
+## [0.2.0] - 2026-11-25
 
 ### Features
 
