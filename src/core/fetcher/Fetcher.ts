@@ -1,3 +1,4 @@
+import { HeaderProviderFailure, providedHeaders, type HeaderProvider } from "../headerProvider.js";
 import { toJson } from "../json.js";
 import { withUserAgent } from "../userAgent.js";
 import { APIResponse } from "./APIResponse.js";
@@ -30,6 +31,8 @@ export declare namespace Fetcher {
         responseType?: "json" | "blob" | "sse" | "streaming" | "text" | "arrayBuffer" | "binary-response";
         duplex?: "half";
         endpointMetadata?: EndpointMetadata;
+        /** Called for each attempt, after the other headers are resolved; see {@link HeaderProvider}. */
+        headerProvider?: HeaderProvider | undefined;
     }
 
     export type Error = FailedStatusCodeError | NonJsonError | TimeoutError | UnknownError;
@@ -63,6 +66,7 @@ async function getHeaders(args: Fetcher.Args): Promise<Record<string, string>> {
     }
 
     if (args.headers == null) {
+        Object.assign(newHeaders, providedHeaders(args.headerProvider, Object.keys(newHeaders)));
         return withUserAgent(newHeaders);
     }
 
@@ -77,6 +81,9 @@ async function getHeaders(args: Fetcher.Args): Promise<Record<string, string>> {
         }
         newHeaders[key] = `${result}`;
     }
+    // Last, and once per attempt, so the provider sees the caller's context at
+    // the moment this attempt is sent; every header set so far wins over it.
+    Object.assign(newHeaders, providedHeaders(args.headerProvider, Object.keys(newHeaders)));
     // Every HTTP request goes through here, also from a resource client built without FishAudioClient.
     return withUserAgent(newHeaders);
 }
@@ -125,6 +132,10 @@ export async function fetcherImpl<R = unknown>(args: Fetcher.Args): Promise<APIR
             };
         }
     } catch (error) {
+        if (error instanceof HeaderProviderFailure) {
+            // The caller's own error, unchanged: nothing was sent.
+            throw error.cause;
+        }
         if (args.abortSignal != null && args.abortSignal.aborted) {
             return {
                 ok: false,

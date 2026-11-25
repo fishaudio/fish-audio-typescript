@@ -349,6 +349,79 @@ fishAudio.user.get_api_credit()
 fishAudio.user.get_package()
 ```
 
+## Tracing
+
+Fish Audio continues your distributed trace when a request carries a W3C
+[`traceparent`](https://www.w3.org/TR/trace-context/) header, on HTTP calls and on
+both WebSockets. Pass a `headerProvider`: the SDK calls it for every request (once
+per attempt, retries included) and every WebSocket handshake, right before sending,
+in the call's async context. It takes no arguments, so read your current span or
+request inside it (`AsyncLocalStorage` works), and returns the headers to add, or
+`undefined`. It must be synchronous.
+
+**OpenTelemetry.** With `@opentelemetry/auto-instrumentations-node` (undici covers
+`fetch`, http covers the WebSocket handshakes), every SDK request already carries
+`traceparent`: you need nothing here, and **must not** return `traceparent` from a
+`headerProvider`, because the undici instrumentation adds its own next to it and a
+request with two makes the API start a new trace. Without that instrumentation:
+
+```typescript
+import { context, propagation } from "@opentelemetry/api";
+
+const fishAudio = new FishAudioClient({
+    headerProvider: () => {
+        const carrier: Record<string, string> = {};
+        propagation.inject(context.active(), carrier); // the active span's traceparent
+        return carrier;
+    },
+});
+```
+
+**Your own trace IDs.** The API accepts only a valid `traceparent` (version `00`:
+32 hex digits of trace ID, 16 of parent ID, 2 of flags). Convert your IDs; an
+invalid value is ignored by the API, and the request gets a new trace ID.
+
+```typescript
+import { AsyncLocalStorage } from "node:async_hooks";
+
+const currentRequest = new AsyncLocalStorage<{ traceId: string; spanId: string }>(); // set by your middleware
+
+function toTraceparent(traceId: string, spanId: string): string | undefined {
+    const trace = traceId.replaceAll("-", "").toLowerCase().padStart(32, "0"); // a UUID becomes 32 hex digits
+    const span = spanId.toLowerCase().padStart(16, "0");
+    if (!/^[0-9a-f]{32}$/.test(trace) || !/^[0-9a-f]{16}$/.test(span)) return undefined; // not convertible: no header
+    if (/^0+$/.test(trace) || /^0+$/.test(span)) return undefined; // all zeros is invalid
+    return `00-${trace}-${span}-01`; // 01: sampled
+}
+
+const fishAudio = new FishAudioClient({
+    headerProvider: () => {
+        const request = currentRequest.getStore();
+        return request ? { traceparent: toTraceparent(request.traceId, request.spanId) } : undefined;
+    },
+});
+```
+
+**No tracing.** Nothing to do.
+
+For one call, pass `headers` in the request options, on HTTP and WebSocket calls
+alike. They win over the provider:
+
+```typescript
+await fishAudio.textToSpeech.convert({ text: "Hello" }, "s2.1-pro", { headers: { traceparent } });
+await fishAudio.textToSpeech.convertRealtime({ text: "" }, textStream, "s2.1-pro", { headers: { traceparent } });
+fishAudio.speechToText.convertRealtime({}, microphone(), { headers: { traceparent } });
+```
+
+Rules:
+- The provider cannot set `Authorization`, `model`, `User-Agent`, `Content-Type`,
+  `Content-Length`, `Host` or WebSocket handshake headers; those names are ignored.
+  The client's `headers` and per-call headers win over it.
+- An error it throws rejects the call with that error, unchanged, before anything is
+  sent. Returning a promise, a non-object, or a non-string value throws `TypeError`,
+  as does a value with a line break.
+- It runs on every attempt, synchronously, so keep it fast and free of I/O.
+
 ## License
 
 This project is licensed under the Apache-2.0 License - see the [LICENSE](LICENSE) file for details.

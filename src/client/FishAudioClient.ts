@@ -1,6 +1,7 @@
 import * as environments from "../environments.js";
 import { mergeHeaders } from "../core/headers.js";
-import { Supplier } from "../core/index.js";
+import { HeaderProvider, Supplier } from "../core/index.js";
+import { checkHeaderProvider } from "../core/headerProvider.js";
 import * as errors from "../errors/index.js";
 import { TextToSpeechWebSocket } from "./websocket/TextToSpeechWebSocketClient.js";
 import { Voices } from "../api/resources/voices/Client.js";
@@ -16,6 +17,18 @@ export declare namespace FishAudioClient {
         apiKey?: Supplier<string | undefined>;
         /** Additional headers to include in requests. */
         headers?: Record<string, string | Supplier<string | null | undefined> | null | undefined>;
+        /**
+         * Called for every HTTP request (once per attempt) and every WebSocket
+         * handshake, right before it is sent, to add headers such as the W3C
+         * `traceparent` of your current request. Synchronous; runs in the call's
+         * async context, so `AsyncLocalStorage` and OpenTelemetry's
+         * `context.active()` see the caller's values. Headers the SDK sets, the
+         * `headers` above and per-call `requestOptions.headers` win over it; an
+         * error it throws fails the call unchanged. Do not return `traceparent`
+         * when `@opentelemetry/instrumentation-undici` is active: it adds its own,
+         * and two make the API start a new trace. See the README's "Tracing".
+         */
+        headerProvider?: HeaderProvider;
     }
 
     export interface RequestOptions {
@@ -49,6 +62,7 @@ export class FishAudioClient {
             });
         }
         _options.apiKey = apiKey;
+        checkHeaderProvider(_options.headerProvider);
         this._options = {
             ..._options,
             // User-Agent is added to every request and handshake by withUserAgent();

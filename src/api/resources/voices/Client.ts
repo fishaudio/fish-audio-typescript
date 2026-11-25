@@ -20,6 +20,8 @@ export declare namespace Voices {
         apiKey?: core.Supplier<string | undefined>;
         /** Additional headers to include in requests. */
         headers?: Record<string, string | core.Supplier<string | null | undefined> | null | undefined>;
+        /** Called for every request to add headers such as `traceparent`; see {@link core.HeaderProvider}. */
+        headerProvider?: core.HeaderProvider;
     }
 
     export interface RequestOptions {
@@ -97,6 +99,7 @@ export class Voices {
         );
 
         const _response = await core.fetcher({
+            headerProvider: this._options.headerProvider,
             url: core.url.join(
                 (await core.Supplier.get(this._options.baseUrl)) ??
                     (await core.Supplier.get(this._options.environment)) ??
@@ -188,6 +191,7 @@ export class Voices {
         );
 
         const _response = await core.fetcher({
+            headerProvider: this._options.headerProvider,
             url: core.url.join(
                 (await core.Supplier.get(this._options.baseUrl)) ??
                     (await core.Supplier.get(this._options.environment)) ??
@@ -279,6 +283,7 @@ export class Voices {
         );
 
         const _response = await core.fetcher({
+            headerProvider: this._options.headerProvider,
             url: core.url.join(
                 (await core.Supplier.get(this._options.baseUrl)) ??
                     (await core.Supplier.get(this._options.environment)) ??
@@ -398,6 +403,7 @@ export class Voices {
         );
         
         const _response = await core.fetcher({
+            headerProvider: this._options.headerProvider,
             url: core.url.join(
                 (await core.Supplier.get(this._options.baseUrl)) ??
                     (await core.Supplier.get(this._options.environment)) ??

@@ -1,7 +1,7 @@
 import { SpeechToText } from "../../api/resources/speechToText/Client.js";
 import * as core from "../../core/index.js";
 import * as environments from "../../environments.js";
-import { withUserAgent } from "../../core/userAgent.js";
+import { handshakeHeaders } from "./handshakeHeaders.js";
 import { FishAudioError } from "../../errors/FishAudioError.js";
 import { RealtimeSTTStream } from "./RealtimeSTTStream.js";
 import type { RealtimeSTTAudioInput, RealtimeSTTRequest, RealtimeSTTRequestOptions } from "./realtimeSTTTypes.js";
@@ -69,23 +69,19 @@ export class SpeechToTextWebSocket extends SpeechToText {
                 // (a gateway in front of a custom baseUrl may need them). The API
                 // key and the realtime model replace a header of the same name in
                 // any casing, so the handshake never carries two of either.
-                const headers: Record<string, string> = {};
-                for (const [name, supplier] of Object.entries(this._options.headers ?? {})) {
-                    if (["authorization", "model"].includes(name.toLowerCase())) {
-                        // Replaced below, so its supplier is not run either.
-                        continue;
-                    }
-                    const value = await core.Supplier.get(supplier);
-                    if (value != null) {
-                        headers[name] = value;
-                    }
-                }
-                headers.Authorization = `Bearer ${apiKey}`;
-                headers.model = request.model ?? "transcribe-stream-1";
+                const headers = await handshakeHeaders({
+                    clientHeaders: this._options.headers,
+                    sdkHeaders: {
+                        Authorization: `Bearer ${apiKey}`,
+                        model: request.model ?? "transcribe-stream-1",
+                    },
+                    requestHeaders: requestOptions.headers,
+                    headerProvider: this._options.headerProvider,
+                });
                 return {
                     // Joined as HTTP requests are, so a path or query on baseUrl is kept.
                     url: core.url.join(baseUrl.replace(/^http/i, "ws"), "v1/asr/realtime"),
-                    headers: withUserAgent(headers),
+                    headers,
                 };
             },
         });
