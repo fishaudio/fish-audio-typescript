@@ -1,5 +1,8 @@
-/** Speech-to-text models. `transcribe-1-pro` is recommended; the API's default is `transcribe-1`. */
-export type STTModel = "transcribe-1" | "transcribe-1-pro" | (string & {});
+/**
+ * Speech-to-text models: `transcribe-1`, `transcribe-1-pro` and `transcribe-2-pro`.
+ * `transcribe-1-pro` is recommended; the API's default is `transcribe-1`.
+ */
+export type STTModel = "transcribe-1" | "transcribe-1-pro" | "transcribe-2-pro" | (string & {});
 
 export interface STTRequest {
     audio: File;
