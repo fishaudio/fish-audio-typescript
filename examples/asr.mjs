@@ -4,7 +4,7 @@ import { createReadStream } from "fs";
 async function main() {
     const fishAudio = new FishAudioClient();
 
-    const audioFile = createReadStream(new URL("/path/to/your/audio/file"));
+    const audioFile = createReadStream("/path/to/your/audio/file");
 
     try {
         const result = await fishAudio.speechToText.convert({

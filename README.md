@@ -73,10 +73,10 @@ const request: TTSRequest = {
 Or pass `ReferenceAudio` for zero-shot cloning:
 
 ```typescript
-import { File } from "node:buffer";
-import { readFile } from "fs/promises";
+import { readFile } from "node:fs/promises";
 import type { ReferenceAudio, TTSRequest } from "fish-audio";
 
+// File is a global in Node.js 20 and later.
 const audioBuffer = await readFile("path/to/your/audio/file.mp3");
 const referenceFile = new File([audioBuffer], "audio_file_name.mp3");
 
@@ -157,11 +157,11 @@ connection.on(RealtimeEvents.CLOSE, async () => {
 
 ```typescript
 import { FishAudioClient } from "fish-audio";
-import { createReadStream } from "fs";
+import { readFile } from "node:fs/promises";
 
 const fishAudio = new FishAudioClient();
 
-const audioFile = createReadStream(new URL("/path/to/your/audio/file"));
+const audioFile = new File([await readFile("/path/to/your/audio/file.mp3")], "file.mp3");
 
 try {
     const result = await fishAudio.speechToText.convert({
@@ -287,13 +287,13 @@ An error the session survives arrives as an `error` event with `recoverable: tru
 #### Clone a Voice
 ```typescript
 import { FishAudioClient } from "fish-audio";
-import { createReadStream } from "fs";
+import { readFile } from "node:fs/promises";
 
 const fishAudio = new FishAudioClient();
 
 const title = "cloned-voice-name";
-const audioFile = createReadStream(new URL("/path/to/your/audio/file"));
-const coverImageFile = createReadStream(new URL("/path/to/your/cover/image/file"));
+const audioFile = new File([await readFile("/path/to/your/audio/file.mp3")], "file.mp3");
+const coverImageFile = new File([await readFile("/path/to/your/cover/image.png")], "image.png");
 
 try {
     const response = await fishAudio.voices.ivc.create({

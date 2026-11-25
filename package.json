@@ -1,6 +1,6 @@
 {
     "name": "fish-audio",
-    "version": "0.1.0",
+    "version": "0.2.0",
     "description": "To provide convenient Node.js program integration for https://docs.fish.audio",
     "repository": {
         "type": "git",
@@ -40,16 +40,19 @@
         "dist"
     ],
     "type": "module",
+    "engines": {
+        "node": ">=20"
+    },
     "devDependencies": {
         "@types/command-exists": "^1.2.3",
         "@types/node": "^24.9.1",
-        "@types/ws": "^8.18.1",
         "tsup": "^8.5.0",
         "typescript": "^5.9.3",
         "vitest": "^4.1.10"
     },
     "dependencies": {
         "@msgpack/msgpack": "^3.1.2",
+        "@types/ws": "^8.18.1",
         "command-exists": "^1.2.9",
         "node-fetch": "^3.3.2",
         "ws": "^8.18.3"
