@@ -28,7 +28,7 @@ This project follows [Semantic Versioning](https://semver.org/). Before 1.0, a m
 
 ### Upgrade notes
 
-- **The default TTS model is now `s2.1-pro`** (it was `s2-pro`), for both `textToSpeech.convert()` and `textToSpeech.convertRealtime()`. To keep the previous model, pass it: `convert(request, "s2-pro")`. ([#2](https://github.com/fishaudio/fish-audio-typescript/pull/2))
+- **The default TTS model is now `s2.1-pro`**, for both `textToSpeech.convert()` and `textToSpeech.convertRealtime()`. The 0.1.0 package on npm sent `s1`: its source set `s2-pro`, but the published build did not include that change. To choose another model, pass it as the second argument, for example `convert(request, "s2-pro")`. Passing `"s1"` keeps the model that npm 0.1.0 used, but `s1` retires on 2026-12-31. ([#2](https://github.com/fishaudio/fish-audio-typescript/pull/2))
 - **`TTSRequest.opus_bitrate` is in bits per second.** The type now allows `-1000 | 24000 | 32000 | 48000 | 64000` (it was `24 | 32 | 48 | 64`), which is what the API expects. TypeScript code that passes `24`, `32`, `48` or `64` no longer compiles: multiply the value by 1000. ([#4](https://github.com/fishaudio/fish-audio-typescript/pull/4))
 - **`ReferenceAudio.audio` must be a `File` or `Blob`.** The type always said `File`, but 0.1.0 also sent any other value unchanged. A `Buffer` or `Uint8Array` passed with a type cast now fails with `ref.audio.arrayBuffer is not a function`. Wrap it: `new File([new Uint8Array(buffer)], "sample.mp3")`. ([#4](https://github.com/fishaudio/fish-audio-typescript/pull/4))
 - **Old model names were removed from the `Backends` type** (`speech-1.5`, `speech-1.6`, `agent-x0`, `s1-mini`). This does not break compilation, because any string is accepted, but these names no longer autocomplete. `s1` retires on 2026-12-31; use `s2.1-pro`. ([#9](https://github.com/fishaudio/fish-audio-typescript/pull/9))
@@ -36,7 +36,7 @@ This project follows [Semantic Versioning](https://semver.org/). Before 1.0, a m
 
 ## [0.1.0] - 2026-03-10
 
-- Default TTS model `s2-pro`.
+- Default TTS model `s2-pro` in the source; the package published to npm sends `s1`.
 
 [Unreleased]: https://github.com/fishaudio/fish-audio-typescript/compare/v0.2.0...HEAD
 [0.2.0]: https://github.com/fishaudio/fish-audio-typescript/compare/v0.1.0...v0.2.0
