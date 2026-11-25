@@ -6,7 +6,7 @@
         "type": "git",
         "url": "git+https://github.com/fishaudio/fish-audio-typescript.git"
     },
-    "license": "MIT",
+    "license": "Apache-2.0",
     "author": "",
     "main": "./dist/cjs/index.js",
     "module": "./dist/esm/index.js",
