@@ -5,8 +5,8 @@ async function main() {
     const fishAudio = new FishAudioClient();
 
     const title = "cloned-voice-name";
-    const audioFile = createReadStream(new URL("/path/to/your/audio/file"));
-    const coverImageFile = createReadStream(new URL("/path/to/your/cover/image/file"));
+    const audioFile = createReadStream("/path/to/your/audio/file");
+    const coverImageFile = createReadStream("/path/to/your/cover/image/file");
 
     try {
         const response = await fishAudio.voices.ivc.create({
