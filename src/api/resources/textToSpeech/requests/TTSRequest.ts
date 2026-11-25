@@ -27,6 +27,15 @@ export interface TTSRequest {
     prosody?: ProsodyControl;
     chunk_length?: number;
     normalize?: boolean;
+    /**
+     * BCP-47 tag of the text's language, such as `en`, `es-MX` or `zh-CN`.
+     * It only changes how text normalization spells out numbers, dates, units
+     * and symbols (and word-timestamp alignment); it does not change the voice
+     * or accent. Sent as given; the API checks it. Leave it unset to let the
+     * API detect the language of each chunk, including for mixed-language
+     * text. On `convertRealtime` it applies to the whole session.
+     */
+    language?: string;
     format?: 'wav' | 'pcm' | 'mp3' | 'opus';
     sample_rate?: number;
     mp3_bitrate?: 64 | 128 | 192;

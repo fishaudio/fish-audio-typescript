@@ -59,6 +59,20 @@ await play(audio);
 const drama = await fishAudio.textToSpeech.convert(request, "drama-3");
 ```
 
+#### Language
+
+`language` is a BCP-47 tag for the language of your text, such as `en`, `es-MX` or `zh-CN`. It only changes how numbers, dates, units and symbols are spelled out before synthesis; it does not change the voice or accent. Leave it unset to let the API detect the language of each chunk, which is also the right choice for text that mixes languages. On `convertRealtime` it applies to the whole session.
+
+```typescript
+// "$300" is read as "trescientos pesos" with es-MX, "trescientos dólares" with es
+const audio = await fishAudio.textToSpeech.convert({
+    text: "La entrada cuesta $300.",
+    language: "es-MX",
+});
+```
+
+See [supported normalization languages](https://docs.fish.audio/features/text-to-speech#supported-normalization-languages).
+
 #### Reference Audio
 
 ```typescript
