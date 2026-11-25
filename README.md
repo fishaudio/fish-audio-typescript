@@ -348,3 +348,7 @@ fishAudio.user.get_api_credit()
 ```typescript
 fishAudio.user.get_package()
 ```
+
+## License
+
+This project is licensed under the Apache-2.0 License - see the [LICENSE](LICENSE) file for details.

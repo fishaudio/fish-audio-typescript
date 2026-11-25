@@ -3,6 +3,12 @@
 All notable changes to the `fish-audio` npm package are listed here.
 This project follows [Semantic Versioning](https://semver.org/). Before 1.0, a minor version may contain breaking changes; they are listed under "Upgrade notes".
 
+## [Unreleased]
+
+### Changed
+
+- **The licence is now Apache-2.0.** `package.json` states `"license": "Apache-2.0"` and the repository and the npm package contain a `LICENSE` file with the Apache License 2.0 text. Versions 0.1.0 and 0.2.0 were published with `"license": "MIT"` in their metadata and without a `LICENSE` file.
+
 ## [0.2.0] - 2026-11-25
 
 ### Features
@@ -32,5 +38,6 @@ This project follows [Semantic Versioning](https://semver.org/). Before 1.0, a m
 
 - Default TTS model `s2-pro`.
 
+[Unreleased]: https://github.com/fishaudio/fish-audio-typescript/compare/v0.2.0...HEAD
 [0.2.0]: https://github.com/fishaudio/fish-audio-typescript/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/fishaudio/fish-audio-typescript/releases/tag/v0.1.0
