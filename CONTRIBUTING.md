@@ -21,18 +21,36 @@ A release is published to npm by the `Release` workflow (`.github/workflows/rele
     - `npm version X.Y.Z --no-git-tag-version` updates `package.json` and `package-lock.json`.
     - Add a `## [X.Y.Z] - YYYY-MM-DD` section to `CHANGELOG.md`, with upgrade notes for anything that can break existing code.
 2. Merge the pull request.
-3. Optional rehearsal: run the `Release` workflow by hand from the Actions tab on `main`. It tests the package and runs `npm publish --dry-run`; it uploads nothing.
+3. Optional rehearsal: run the `Release` workflow by hand from the Actions tab on `main`. It tests the package on Node.js 20, 22 and 24 and runs `npm pack --dry-run`, which builds the package and lists the files a publish would upload. It does not ask the registry about the version and uploads nothing, so it works at any time, also right after a release.
 4. Create a GitHub Release from `main` with the tag `vX.Y.Z`. The tag must be `v` followed by the version in `package.json`, or the workflow stops before publishing.
 
     ```bash
     gh release create vX.Y.Z --target main --title "vX.Y.Z" --notes "See CHANGELOG.md"
     ```
 
-5. The workflow tests the package on Node.js 20, 22 and 24, then runs `npm publish`. Check the result with `npm view fish-audio version`.
+    If the tag `vX.Y.Z` already exists, `gh` uses it and ignores `--target`. The workflow publishes the commit the tag points to, with the workflow file of that commit.
 
-A version with a pre-release part, such as `1.0.0-beta.1`, is published under the `next` dist-tag instead of `latest`.
+5. The workflow tests the package on Node.js 20, 22 and 24, then runs `npm publish`. Check the result with `npm view fish-audio dist-tags`.
 
-If the publish job fails, fix the cause and re-run the failed job: nothing is uploaded before its last step. A version that is already on npm cannot be published again; release a new version instead.
+### Which dist-tag a version gets
+
+- A stable version, such as `1.2.0`, is published without `--tag`. npm gives it `latest`, and refuses the publish if the version is lower than the current `latest`. The workflow therefore cannot move `latest` backwards.
+- A version with a pre-release part, such as `1.0.0-beta.1`, is published with `--tag next`. The workflow stops before publishing if `next` already points to a higher version.
+- A stable version lower than `latest`, such as a patch for an older minor, is not published by this workflow: the publish job fails with npm's message that it cannot apply `latest` implicitly. A package owner publishes it by hand with a tag of its own, for example `npm publish --tag release-1.1`.
+
+### Several releases, re-runs and failures
+
+- Releases run one at a time, in the order their GitHub Releases were published. A release that is waiting is not dropped when another one is started, and a rehearsal never takes the place of a waiting release.
+- Publish versions in ascending order. If `1.2.1` is released before `1.2.0`, the run for `1.2.0` fails as described above.
+- If a job fails for a reason outside the code (a network error, an approval that timed out), re-run the failed jobs. Nothing is uploaded before the last step of the publish job, and that step either publishes the whole version or nothing.
+- If the code or the workflow must change, the existing tag cannot be reused as it is: a re-run uses the tagged commit and its copy of the workflow. As long as the version is not on npm, delete the GitHub Release and its tag, merge the fix, and create the release again. This starts a new run.
+
+    ```bash
+    gh release delete vX.Y.Z --cleanup-tag
+    ```
+
+- A version that is on npm cannot be published again. Re-running its release, or creating a GitHub Release for a version that was published by hand, fails with `You cannot publish over the previously published versions`. That failure changes nothing on npm. To change a published version, release a new one.
+- If a GitHub Release exists but its version is not on npm, the publish did not happen. Open the workflow run of that release to see why, then follow the two cases above.
 
 ### One-time setup: npm Trusted Publisher
 

@@ -1,7 +1,8 @@
 name: Release
 
 # Publishes to npm when a GitHub Release is published. See CONTRIBUTING.md.
-# Run it by hand (workflow_dispatch) to rehearse everything except the upload.
+# Run it by hand (workflow_dispatch) to rehearse the tests and the packaging;
+# a rehearsal does not ask the registry about the version and uploads nothing.
 on:
   release:
     types: [published]
@@ -10,10 +11,13 @@ on:
 permissions:
   contents: read
 
-# One release at a time, and a running one is never cancelled.
+# Releases run one at a time, in the order they were started. "queue: max"
+# keeps every waiting release; the default keeps only the newest waiting run
+# and cancels the others. Rehearsals have their own group, so a rehearsal can
+# never take the place of a waiting release. A running one is never cancelled.
 concurrency:
-  group: release
-  cancel-in-progress: false
+  group: ${{ github.event_name == 'release' && 'release' || 'release-rehearsal' }}
+  queue: max
 
 jobs:
   test:
@@ -46,8 +50,8 @@ jobs:
       - run: npm test
       - run: node scripts/smoke-pack.mjs
 
-  dry-run:
-    name: Publish (dry run)
+  pack:
+    name: Pack (rehearsal)
     if: github.event_name == 'workflow_dispatch'
     needs: test
     runs-on: ubuntu-latest
@@ -58,13 +62,17 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: '24'
-          registry-url: 'https://registry.npmjs.org'
 
+      # The same npm and the same install as the publish job.
       - run: npm install -g npm@11
 
       - run: npm ci --ignore-scripts
 
-      - run: npm publish --dry-run --access public
+      # Builds dist through prepack and lists the files a publish would upload.
+      # Not "npm publish --dry-run": that asks the registry, so it fails for a
+      # version that is already published, which is the state right after a
+      # release.
+      - run: npm pack --dry-run
 
   publish:
     name: Publish to npm
@@ -94,17 +102,47 @@ jobs:
       # "npm publish" still builds dist through the package's own prepack script.
       - run: npm ci --ignore-scripts
 
-      # A version such as 1.0.0-beta.1 goes to the "next" dist-tag, not "latest".
-      - name: Choose the dist-tag
-        id: dist-tag
+      - name: Read the version
+        id: version
         run: |
           VERSION="$(node -p "require('./package.json').version")"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           case "$VERSION" in
-            *-*) echo "tag=next" >> "$GITHUB_OUTPUT" ;;
-            *) echo "tag=latest" >> "$GITHUB_OUTPUT" ;;
+            *-*) echo "prerelease=true" >> "$GITHUB_OUTPUT" ;;
+            *) echo "prerelease=false" >> "$GITHUB_OUTPUT" ;;
           esac
 
-      # No NODE_AUTH_TOKEN: npm exchanges the job's OIDC token itself.
-      - run: npm publish --provenance --access public --tag "$DIST_TAG"
+      # No NODE_AUTH_TOKEN in the publish steps: npm exchanges the job's OIDC
+      # token itself.
+
+      # A stable version gets npm's default dist-tag handling: no --tag. npm
+      # then refuses a version lower than the current "latest", so a late or
+      # retried run of an older release cannot move "latest" backwards. An
+      # explicit "--tag latest" would switch that check off.
+      - name: Publish a stable version
+        if: steps.version.outputs.prerelease == 'false'
+        run: npm publish --provenance --access public
+
+      # A version such as 1.0.0-beta.1 goes to "next". npm requires an explicit
+      # tag for it and does not compare versions for an explicit tag, so this
+      # step makes the same check for "next" itself.
+      - name: Check that "next" would not move backwards
+        if: steps.version.outputs.prerelease == 'true'
         env:
-          DIST_TAG: ${{ steps.dist-tag.outputs.tag }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          CURRENT="$(npm view fish-audio dist-tags.next)"
+          if [ -z "$CURRENT" ]; then
+            exit 0
+          fi
+          # npm's own copy of semver.
+          SEMVER="$(npm root -g)/npm/node_modules/semver"
+          export SEMVER CURRENT
+          if node -e 'process.exit(require(process.env.SEMVER).gt(process.env.CURRENT, process.env.VERSION) ? 0 : 1)'; then
+            echo "::error::The 'next' dist-tag is at $CURRENT, which is higher than $VERSION. Publishing $VERSION would move 'next' backwards."
+            exit 1
+          fi
+
+      - name: Publish a pre-release version
+        if: steps.version.outputs.prerelease == 'true'
+        run: npm publish --provenance --access public --tag next
