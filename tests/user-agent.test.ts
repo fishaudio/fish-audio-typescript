@@ -5,7 +5,15 @@ import type { AddressInfo } from "node:net";
 import { WebSocketServer } from "ws";
 import { afterEach, describe, expect, it } from "vitest";
 import { FishAudioClient, FishAudioError, RealtimeEvents, TextToSpeechWebSocket } from "../src/index.js";
-import { SDK_USER_AGENT, withUserAgent } from "../src/core/userAgent.js";
+import {
+    SDK_PRODUCT,
+    SDK_USER_AGENT,
+    buildUserAgent,
+    commentValue,
+    detectPlatform,
+    osFamily,
+    withUserAgent,
+} from "../src/core/userAgent.js";
 import { VERSION } from "../src/version.js";
 import { startRealtimeServer, type FakeServer } from "./realtimeServer.js";
 
@@ -72,12 +80,74 @@ describe("SDK version", () => {
     });
 
     it("the User-Agent product is fish-audio-typescript/<package.json version>", () => {
-        expect(SDK_USER_AGENT).toBe(`fish-audio-typescript/${packageJson.version}`);
+        expect(SDK_PRODUCT).toBe(`fish-audio-typescript/${packageJson.version}`);
     });
 
     it("the product is valid RFC 9110 grammar: token \"/\" token", () => {
-        const tchar = "[!#$%&'*+\\-.^_`|~0-9A-Za-z]";
-        expect(SDK_USER_AGENT).toMatch(new RegExp(`^${tchar}+/${tchar}+$`));
+        expect(SDK_PRODUCT).toMatch(new RegExp(`^${TCHAR}+/${TCHAR}+$`));
+    });
+});
+
+const TCHAR = "[!#$%&'*+\\-.^_`|~0-9A-Za-z]";
+// product RWS comment, with nothing in the comment that RFC 9110 ctext excludes.
+const USER_AGENT_GRAMMAR = new RegExp(`^${TCHAR}+/${TCHAR}+ \\([^()\\\\\\x00-\\x1f\\x7f]*\\)$`);
+
+describe("runtime comment", () => {
+    it("on Node it names node, its version and the OS family", () => {
+        expect(SDK_USER_AGENT).toBe(`${SDK_PRODUCT} (node ${process.versions.node}; ${osFamily(process.platform)})`);
+        expect(SDK_USER_AGENT).toMatch(USER_AGENT_GRAMMAR);
+    });
+
+    it("uses the shape (<runtime> <version>; <os>)", () => {
+        expect(buildUserAgent("bun", "1.2.3", "linux")).toBe(`${SDK_PRODUCT} (bun 1.2.3; linux)`);
+        expect(buildUserAgent("deno", "2.1.0", "windows")).toBe(`${SDK_PRODUCT} (deno 2.1.0; windows)`);
+        expect(buildUserAgent("workerd", undefined, undefined)).toBe(`${SDK_PRODUCT} (workerd unknown; unknown)`);
+    });
+
+    it("normalises the OS to a short lowercase word", () => {
+        expect(osFamily("win32")).toBe("windows");
+        expect(osFamily("Darwin")).toBe("darwin");
+        expect(osFamily("linux")).toBe("linux");
+        expect(osFamily("freebsd")).toBe("freebsd");
+        expect(osFamily(undefined)).toBe("unknown");
+    });
+
+    it("drops anything that could break the comment or identify a machine", () => {
+        const hostile = [
+            "1.2.3 (evil)",
+            "1.2.3)",
+            "1.2.3\\(",
+            "1.2.3\r\nX-Injected: 1",
+            "1.2.3\u0000",
+            "1.2.3; host=alice-laptop",
+            "1.2.3 /home/alice",
+        ];
+        for (const value of hostile) {
+            expect(commentValue(value)).toBe("1.2.3");
+            expect(buildUserAgent("node", value, value)).toMatch(USER_AGENT_GRAMMAR);
+        }
+        expect(commentValue("(x)")).toBe("unknown");
+        expect(commentValue("\\")).toBe("unknown");
+        expect(commentValue("")).toBe("unknown");
+        expect(commentValue(42)).toBe("unknown");
+        expect(commentValue("1".repeat(100))).toBe("1".repeat(32));
+    });
+
+    it("detecting the platform never throws, also without process", () => {
+        expect(detectPlatform("node", {})).toBeUndefined();
+        expect(detectPlatform("bun", { process: {} })).toBeUndefined();
+        expect(detectPlatform("deno", { Deno: { build: { os: "linux" } } })).toBe("linux");
+        expect(detectPlatform("workerd", { process: { platform: "linux" } })).toBeUndefined();
+        const throwing = {
+            get process(): never {
+                throw new Error("no process here");
+            },
+        };
+        expect(detectPlatform("node", throwing)).toBeUndefined();
+    });
+
+    it("a caller's User-Agent comes after the comment", () => {
+        expect(withUserAgent({ "User-Agent": "my-app/1.0" })["User-Agent"]).toBe(`${SDK_USER_AGENT} my-app/1.0`);
     });
 });
 
