@@ -5,12 +5,12 @@ import * as otel from "@opentelemetry/api";
 import { createServer, type IncomingMessage, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { WebSocketServer } from "ws";
-import { randomBytes } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import { AlwaysOffSampler, BasicTracerProvider } from "@opentelemetry/sdk-trace-base";
 import { FishAudioClient, RealtimeEvents, openTelemetryHeaders, type OpenTelemetryApi } from "../src/index.js";
 import { startRealtimeServer } from "./realtimeServer.js";
-import { resetTraceContinuationWarning, traceIdOf } from "../src/core/traceContinuation.js";
+import { resetTraceContinuationWarning } from "../src/core/traceContinuation.js";
+import { gatewayTraceId } from "./gateway.js";
 
 const cleanups: Array<() => Promise<void>> = [];
 let warnings: MockInstance<typeof process.emitWarning>;
@@ -30,12 +30,6 @@ function traceWarnings(): string[] {
     return warnings.mock.calls
         .filter(([, options]) => (options as { type?: string } | undefined)?.type === "FishAudioTraceWarning")
         .map(([message]) => String(message));
-}
-
-/** As Fish Audio's gateway: the sent trace if exactly one valid traceparent came, else a new trace. */
-function gatewayTraceId(rawHeaders: string[]): string {
-    const sent = traceparents(rawHeaders);
-    return (sent.length === 1 ? traceIdOf(sent[0]!) : undefined) ?? randomBytes(16).toString("hex");
 }
 
 const tracer = provider.getTracer("test");
@@ -236,7 +230,76 @@ describe("with @opentelemetry/instrumentation-undici", () => {
         expect(api.requests.length).toBe(3);
         const [message, ...more] = traceWarnings();
         expect(more).toEqual([]);
-        expect(message).toContain(`sent trace id ${outer.spanContext().traceId}, the API used `);
-        expect(message).toContain("@opentelemetry/instrumentation-undici");
+        expect(message).toContain(`(sent trace ${outer.spanContext().traceId}, API used `);
+        expect(message).toContain("@opentelemetry/instrumentation-undici appends its own to every fetch request");
+    });
+});
+
+describe("with @opentelemetry/instrumentation-http on the WebSocket handshakes", () => {
+    const TRACE_A = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
+    const fixedA = () => ({ traceparent: TRACE_A });
+
+    async function handshakes(run: (client: FishAudioClient, sttClient: FishAudioClient) => Promise<void>) {
+        const api = await fakeApi();
+        const stt = await startRealtimeServer(
+            async (connection) => {
+                await connection.start();
+                await connection.until("audio_done");
+                connection.done();
+            },
+            { traceId: gatewayTraceId },
+        );
+        cleanups.push(() => stt.close());
+        const options = { apiKey: "k", headerProvider: fixedA };
+        await run(new FishAudioClient({ ...options, baseUrl: api.url }), new FishAudioClient({ ...options, baseUrl: stt.url }));
+        return [api.requests[0]!.rawHeaders, stt.connections[0]!.rawHeaders];
+    }
+
+    async function both(client: FishAudioClient, sttClient: FishAudioClient) {
+        await ttsHandshake(client);
+        resetTraceContinuationWarning();
+        for await (const _ of sttClient.speechToText.convertRealtime({}, [])) {
+            // drain
+        }
+    }
+
+    it("a provider's trace that is not the active span's is replaced on the way out, and the warning says so", async () => {
+        let outerTraceId = "";
+        const sent = await tracer.startActiveSpan("outer", async (span) => {
+            outerTraceId = span.spanContext().traceId;
+            const result = await handshakes(both);
+            span.end();
+            return result;
+        });
+
+        for (const rawHeaders of sent) {
+            // One traceparent left the process, the active span's trace, not the provider's.
+            const [value, ...more] = traceparents(rawHeaders);
+            expect(more).toEqual([]);
+            expect(value!.split("-")[1]).toBe(outerTraceId);
+        }
+        const messages = traceWarnings();
+        expect(messages.length).toBe(2); // one per handshake: the flag is reset in between
+        for (const message of messages) {
+            expect(message).toContain(
+                `The trace this SDK sent is not the one Fish Audio used (sent trace 4bf92f3577b34da6a3ce929d0e0e4736, API used ${outerTraceId}).`,
+            );
+            expect(message).toContain(
+                `It was replaced before the handshake left this process: it went out as trace ${outerTraceId}, which the API continued.`,
+            );
+            expect(message).toContain("@opentelemetry/instrumentation-http does this");
+            expect(message).not.toContain("instrumentation-undici");
+        }
+    });
+
+    it("without an active span the instrumentation sends a new trace in place of the provider's", async () => {
+        const sent = await handshakes(both);
+        const goneOut = sent.map((rawHeaders) => traceparents(rawHeaders)[0]!.split("-")[1]!);
+        for (const traceId of goneOut) expect(traceId).not.toBe("4bf92f3577b34da6a3ce929d0e0e4736");
+        const messages = traceWarnings();
+        expect(messages.length).toBe(2);
+        messages.forEach((message, i) => {
+            expect(message).toContain(`it went out as trace ${goneOut[i]}, which the API continued.`);
+        });
     });
 });

@@ -4,7 +4,7 @@ import { RealtimeConnection, StartEvent, TextEvent, CloseEvent } from "./connect
 import * as core from "../../core/index.js";
 import * as environments from "../../environments.js";
 import { handshakeHeaders } from "./handshakeHeaders.js";
-import { checkTraceContinued, TRACE_ID_RESPONSE_HEADER } from "../../core/traceContinuation.js";
+import { checkHandshakeTrace } from "./handshakeTrace.js";
 import { TTSRequest } from "../../api/resources/textToSpeech/requests/TTSRequest.js";
 import { Backends } from "../../api/resources/textToSpeech/Client.js";
 
@@ -12,9 +12,11 @@ import { Backends } from "../../api/resources/textToSpeech/Client.js";
 export interface RealtimeTTSRequestOptions {
     /**
      * Additional headers for the WebSocket handshake. They are merged as on HTTP
-     * requests: they win over the client's `headers` and its `headerProvider`.
-     * A value must be empty, or visible ASCII with spaces or tabs only between
-     * characters; any other value throws `TypeError` before connecting.
+     * requests: they win over the client's `headers` and its `headerProvider`,
+     * and a `null` or `undefined` value sends no such header (the provider does
+     * not add it back). A value must be empty, or visible ASCII with spaces or
+     * tabs only between characters; any other value throws `TypeError` before
+     * connecting.
      */
     headers?: Record<string, string | core.Supplier<string | null | undefined> | null | undefined>;
 }
@@ -93,22 +95,19 @@ export class TextToSpeechWebSocket extends TextToSpeech {
 
         // The client's headers go along, as on HTTP requests and the realtime STT
         // handshake; a User-Agent among them is appended to the SDK's own.
+        // Only User-Agent went along before, so the others are checked.
         const headers = await handshakeHeaders({
             clientHeaders: this._options.headers,
             sdkHeaders: { Authorization: `Bearer ${apiKey as string}`, model: backend },
             requestHeaders: requestOptions.headers,
             headerProvider: this._options.headerProvider,
+            checkClientHeaders: true,
         });
 
         return new Promise((resolve) => {
-            const websocket = new WebSocket(uri, { headers });
-            // The handshake response: did Fish Audio continue a trace we sent?
-            // A refused handshake (no listener for "unexpected-response" here, so
-            // ws turns it into an "error") is not checked: listening for it
-            // would take over handling the refusal from ws.
-            websocket.on("upgrade", (response) =>
-                checkTraceContinued(headers, () => response.headers[TRACE_ID_RESPONSE_HEADER]),
-            );
+            // finishRequest checks the handshake response, accepted or refused,
+            // against the trace we sent.
+            const websocket = new WebSocket(uri, { headers, finishRequest: checkHandshakeTrace(headers) });
 
             // Attach websocket to connection immediately so error handlers are registered
             // This ensures errors during handshake (like 403) are properly emitted via event emitter

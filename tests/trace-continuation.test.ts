@@ -1,5 +1,4 @@
 /// <reference types="node" />
-import { randomBytes } from "node:crypto";
 import { createServer, type IncomingMessage, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { WebSocketServer } from "ws";
@@ -10,21 +9,12 @@ import {
     resetTraceContinuationWarning,
     traceIdOf,
 } from "../src/core/traceContinuation.js";
+import { gatewayTraceId } from "./gateway.js";
 import { FakeConnection } from "./realtimeServer.js";
 
 const TRACE_ID = "4bf92f3577b34da6a3ce929d0e0e4736";
 const TRACEPARENT = `00-${TRACE_ID}-00f067aa0ba902b7-01`;
 const OTHER_ID = "0af7651916cd43dd8448eb211c80319c";
-
-/** The trace id the gateway uses: the sent one if exactly one valid traceparent came, else a new one. */
-function gatewayTraceId(rawHeaders: string[]): string {
-    const sent: string[] = [];
-    for (let i = 0; i < rawHeaders.length; i += 2) {
-        if (rawHeaders[i]!.toLowerCase() === "traceparent") sent.push(rawHeaders[i + 1]!);
-    }
-    const id = sent.length === 1 ? traceIdOf(sent[0]!) : undefined;
-    return id ?? randomBytes(16).toString("hex");
-}
 
 interface Gateway {
     url: string;
@@ -35,6 +25,8 @@ interface Gateway {
     statuses: number[];
     /** Refuse WebSocket handshakes with this status. */
     refuse?: number;
+    /** Called with the socket of each WebSocket upgrade request. */
+    onUpgradeSocket?: (socket: import("node:stream").Duplex) => void;
 }
 
 const cleanups: Array<() => Promise<void>> = [];
@@ -86,6 +78,7 @@ async function startGateway(): Promise<Gateway> {
     const wss = new WebSocketServer({ noServer: true });
     server.on("upgrade", (request, socket, head) => {
         gateway.requests.push(request);
+        gateway.onUpgradeSocket?.(socket);
         const id = answer(request);
         if (gateway.refuse !== undefined) {
             const body = JSON.stringify({ detail: "refused" });
@@ -183,8 +176,18 @@ describe("trace continuation check", () => {
             await run(clientFor(gateway, fixed(TRACEPARENT)));
             const [message, ...more] = traceWarnings();
             expect(more).toEqual([]);
-            expect(message).toContain(`sent trace id ${TRACE_ID}, the API used ${OTHER_ID}`);
-            expect(message).toContain("@opentelemetry/instrumentation-undici");
+            expect(message).toContain(
+                `The trace this SDK sent is not the one Fish Audio used (sent trace ${TRACE_ID}, API used ${OTHER_ID}).`,
+            );
+            if (name.startsWith("HTTP")) {
+                // fetch does not show what it sent: the message lists the possibilities.
+                expect(message).toContain("The SDK cannot see the request as it was sent");
+                expect(message).toContain("@opentelemetry/instrumentation-undici appends");
+            } else {
+                // The handshake's request shows it: here it went out as the SDK built it.
+                expect(message).toContain("It left this process unchanged, so the API did not accept the value.");
+                expect(message).not.toContain("instrumentation");
+            }
             expect(message).toContain("https://docs.fish.audio/api-reference/observability");
             expect(warnings.mock.calls[0]![1]).toEqual({
                 type: "FishAudioTraceWarning",
@@ -207,6 +210,89 @@ describe("trace continuation check", () => {
         gateway.refuse = 401;
         await sttSession(clientFor(gateway, fixed(TRACEPARENT)));
         expect(traceWarnings().length).toBe(1);
+    });
+
+    it("warns on a refused TTS WebSocket handshake", async () => {
+        const gateway = await startGateway();
+        gateway.traceId = OTHER_ID;
+        gateway.refuse = 401;
+        await ttsHandshake(clientFor(gateway, fixed(TRACEPARENT)));
+        const [message, ...more] = traceWarnings();
+        expect(more).toEqual([]);
+        expect(message).toContain(`(sent trace ${TRACE_ID}, API used ${OTHER_ID})`);
+    });
+
+    it("a refused TTS handshake looks the same to the caller whether or not the trace is checked", async () => {
+        // What the caller of convertRealtime observes: the connection's events
+        // in order, with the error's class and message, the socket's state at
+        // each, and whether the server saw the connection closed.
+        async function refusedOutcome(headerProvider?: HeaderProvider) {
+            const gateway = await startGateway();
+            gateway.traceId = OTHER_ID;
+            gateway.refuse = 401;
+            const closedOnServer = new Promise<void>((resolve) =>
+                gateway.onUpgradeSocket = (socket) => socket.once("close", () => resolve()),
+            );
+            const connection = await clientFor(gateway, headerProvider).textToSpeech.convertRealtime({ text: "" }, []);
+            const websocket = (connection as unknown as { websocket: { readyState: number } }).websocket;
+            // Event-loop turns, to compare when the events arrive relative to each other.
+            let turn = 0;
+            let ticking = true;
+            const tick = () => {
+                turn += 1;
+                if (ticking) setImmediate(tick);
+            };
+            setImmediate(tick);
+            const events: unknown[][] = [];
+            await new Promise<void>((resolve) => {
+                connection.on(RealtimeEvents.OPEN, () => events.push(["open", turn]));
+                connection.on(RealtimeEvents.ERROR, (error) =>
+                    events.push([
+                        "error",
+                        (error as Error).constructor.name,
+                        (error as Error).message,
+                        websocket.readyState,
+                        turn,
+                    ]),
+                );
+                connection.on(RealtimeEvents.CLOSE, () => {
+                    events.push(["close", websocket.readyState, turn]);
+                    resolve();
+                });
+            });
+            ticking = false;
+            await closedOnServer;
+            // Turns relative to the first event: when the refusal arrives depends on the network.
+            const first = events[0]![events[0]!.length - 1] as number;
+            return events.map((event) => [...event.slice(0, -1), (event[event.length - 1] as number) - first]);
+        }
+
+        // Without a traceparent nothing is checked, as before the check existed.
+        const unchecked = await refusedOutcome();
+        const checked = await refusedOutcome(fixed(TRACEPARENT));
+        expect(checked).toEqual(unchecked);
+        // ws's own handling of a refusal (the outcome before this check existed):
+        // a plain Error with its message, then close in the same turn, the
+        // socket CLOSING then CLOSED.
+        expect(unchecked).toEqual([
+            ["error", "Error", "Unexpected server response: 401", 2, 0],
+            ["close", 3, 0],
+        ]);
+        expect(traceWarnings().length).toBe(1);
+    });
+
+    it("a version other than 00 is sent, and the gateway's new trace is reported", async () => {
+        // The SDK accepts a later version (W3C forward compatibility); the
+        // gateway continues version 00 only.
+        const gateway = await startGateway();
+        const future = `01-${TRACE_ID}-00f067aa0ba902b7-01`;
+        for (const run of Object.values(paths)) await run(clientFor(gateway, fixed(future)));
+        for (const request of gateway.requests) {
+            expect(request.headers.traceparent).toBe(future);
+        }
+        const [message, ...more] = traceWarnings();
+        expect(more).toEqual([]);
+        expect(message).toContain(`(sent trace ${TRACE_ID}, API used `);
     });
 
     it("checks each retry attempt: a retried attempt that was not continued warns", async () => {
@@ -287,7 +373,7 @@ describe("trace continuation check", () => {
             process.emitWarning = emitWarning;
         }
         expect(consoleWarn).toHaveBeenCalledTimes(1);
-        expect(String(consoleWarn.mock.calls[0]![0])).toContain(`the API used ${OTHER_ID}`);
+        expect(String(consoleWarn.mock.calls[0]![0])).toContain(`API used ${OTHER_ID}`);
     });
 
     it("never throws, whatever the response looks like", () => {
@@ -300,6 +386,39 @@ describe("trace continuation check", () => {
         expect(() => checkTraceContinued(sent, () => "not-a-trace-id")).not.toThrow();
         expect(() => checkTraceContinued(sent, () => [OTHER_ID])).not.toThrow();
         expect(traceWarnings().length).toBe(1);
+    });
+});
+
+describe("the warning, when the SDK can see what left the process", () => {
+    const sent = { traceparent: TRACEPARENT };
+
+    it.each([
+        ["removed", undefined, "It was changed before the handshake left this process, into no traceparent at all."],
+        [
+            "duplicated",
+            `${TRACEPARENT}, 00-${OTHER_ID}-00f067aa0ba902b7-01`,
+            "It was changed before the handshake left this process, into a value that is not a single valid W3C traceparent.",
+        ],
+        ["replaced", `00-${OTHER_ID}-b7ad6b7169203331-01`, `it went out as trace ${OTHER_ID}, which the API continued.`],
+        [
+            "given another parent span in the same trace",
+            `00-${TRACE_ID}-b7ad6b7169203331-01`,
+            "It left this process with that trace, so the API did not accept the value.",
+        ],
+    ])("%s on the way out: says so", (_, value, expected) => {
+        checkTraceContinued(sent, () => OTHER_ID, { value });
+        const [message, ...more] = traceWarnings();
+        expect(more).toEqual([]);
+        expect(message).toContain(`(sent trace ${TRACE_ID}, API used ${OTHER_ID})`);
+        expect(message).toContain(expected);
+    });
+
+    it("never echoes a value, only trace ids parsed from it", () => {
+        const secret = "s3cr3t-token-value";
+        checkTraceContinued({ traceparent: secret }, () => OTHER_ID, { value: `${secret}, ${secret}` });
+        const [message] = traceWarnings();
+        expect(message).toContain("(sent a value that is not a valid W3C traceparent, API used");
+        expect(message).not.toContain(secret);
     });
 });
 

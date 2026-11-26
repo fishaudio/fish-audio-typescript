@@ -22,20 +22,25 @@ export declare namespace FishAudioClient {
          * handshake, right before it is sent, to add headers such as the W3C
          * `traceparent` of your current request. Synchronous; runs in the call's
          * async context, so `AsyncLocalStorage` and OpenTelemetry's
-         * `context.active()` see the caller's values. Headers the SDK sets, the
-         * `headers` above and per-call `requestOptions.headers` win over it; an
-         * error it throws fails the call unchanged. A value must be empty, or
-         * visible ASCII with spaces or tabs only between characters; any other
-         * value throws `TypeError` (without the value) before anything is sent. Do not return `traceparent`
-         * when `@opentelemetry/instrumentation-undici` is active: it adds its own,
-         * and two make the API start a new trace. For OpenTelemetry without HTTP
-         * instrumentation, use `openTelemetryHeaders(api)`.
+         * `context.active()` see the caller's values. Headers the SDK sets win
+         * over it, and so does a name in the `headers` above or in per-call
+         * `requestOptions.headers`, also with a `null` or `undefined` value,
+         * which sends no such header. An error it throws fails the call
+         * unchanged. A value must be empty, or visible ASCII with spaces or
+         * tabs only between characters; any other value throws `TypeError`
+         * (without the value) before anything is sent. Do not return
+         * `traceparent` when `@opentelemetry/instrumentation-undici` is active:
+         * it adds its own, and two make the API start a new trace. For
+         * OpenTelemetry without HTTP instrumentation, use
+         * `openTelemetryHeaders(api)`.
          *
-         * When the API did not continue a `traceparent` the SDK sent (its
-         * `x-fish-trace-id` response header names another trace), the SDK warns
-         * once per process: a `FishAudioTraceWarning`, code
-         * `FISH_AUDIO_TRACE_NOT_CONTINUED`. Usual cause: the undici instrumentation
-         * plus this provider; keep only one. See the README's "Tracing".
+         * When the trace the API used (its `x-fish-trace-id` response header) is
+         * not the one in the `traceparent` the SDK sent, the SDK warns once per
+         * process: a `FishAudioTraceWarning`, code
+         * `FISH_AUDIO_TRACE_NOT_CONTINUED`. Usual causes: on HTTP, the undici
+         * instrumentation plus this provider (keep only one); on the WebSocket
+         * handshakes, the http instrumentation replacing a trace that is not the
+         * active span's. See the README's "Tracing".
          */
         headerProvider?: HeaderProvider;
     }

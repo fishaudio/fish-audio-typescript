@@ -5,23 +5,32 @@
  *
  * It takes no arguments: read your current span or request inside it (it runs
  * in the async context of the call, so `AsyncLocalStorage` and OpenTelemetry's
- * `context.active()` see the caller's values). It must be synchronous. Return
- * the headers to add, or `undefined`/`null` to add none; a header whose value
- * is `undefined` or `null` is skipped. A value must be empty, or visible ASCII
- * characters with spaces or tabs only between them (an RFC 9110 field value,
- * ASCII only); any other value throws `TypeError` before anything is sent, and
- * the error does not contain the value.
+ * `context.active()` see the caller's values). It must be synchronous: a
+ * promise (an `async` function) throws `TypeError`, and a rejection of that
+ * promise is handled by the SDK. Return the headers to add, or
+ * `undefined`/`null` to add none; a header whose value is `undefined` or
+ * `null` is skipped. A value must be empty, or visible ASCII characters with
+ * spaces or tabs only between them (an RFC 9110 field value, ASCII only); any
+ * other value throws `TypeError` before anything is sent, and the error does
+ * not contain the value. A value with several problems is reported as the
+ * first of: a control character, a non-ASCII character, leading or trailing
+ * whitespace.
  *
  * Headers the SDK sets (`Authorization`, `model`, `User-Agent`, `Content-Type`,
  * `Content-Length`, `Host`, WebSocket handshake headers) cannot be set by it
- * and are skipped whatever their value, and the client's `headers` and
- * per-call `requestOptions.headers` win over it.
+ * and are skipped whatever their value. A name in the client's `headers` or
+ * the per-call `requestOptions.headers`, in any casing, wins over it, also
+ * with a `null` or `undefined` value (or a supplier returning one), which
+ * sends no such header at all.
  * An error it throws fails the call, unchanged, before anything is sent.
  *
  * Do not return `traceparent` while `@opentelemetry/instrumentation-undici`
- * is active: it appends a second one and Fish Audio starts a new trace. The SDK
- * notices from the `x-fish-trace-id` response header and warns once per process
- * (`FishAudioTraceWarning`, code `FISH_AUDIO_TRACE_NOT_CONTINUED`).
+ * is active: it appends a second one to `fetch` requests and Fish Audio starts
+ * a new trace. `@opentelemetry/instrumentation-http` replaces it on the
+ * WebSocket handshakes with the trace of its own span, so there a trace that
+ * is not the active span's is lost. The SDK notices from the `x-fish-trace-id`
+ * response header and warns once per process (`FishAudioTraceWarning`, code
+ * `FISH_AUDIO_TRACE_NOT_CONTINUED`).
  */
 export type HeaderProvider = () => Record<string, string | null | undefined> | null | undefined;
 
@@ -104,8 +113,9 @@ export function checkHeaderProvider(provider: unknown): void {
 }
 
 /**
- * Calls `provider` and returns the headers it may add to a request that already
- * has the headers named in `taken` (compared without regard to case).
+ * Calls `provider` and returns the headers it may add to a request whose
+ * caller already named the headers in `taken` (compared without regard to
+ * case), whether with a value or with `null`/`undefined` to send none.
  *
  * An error the provider throws, or the `TypeError` for a result it may not
  * return, is thrown wrapped in `HeaderProviderFailure`, for the caller to
@@ -131,6 +141,13 @@ function collect(result: unknown, taken: Iterable<string>): Record<string, strin
     }
     if (typeof (result as { then?: unknown }).then === "function") {
         // Not awaited: the value must reflect the moment the request is sent.
+        // Its rejection is consumed, though: the caller gets this TypeError,
+        // and an unhandled rejection after that would end the Node process.
+        try {
+            Promise.resolve(result).catch(() => {});
+        } catch {
+            // A thenable that cannot even be resolved has nothing to consume.
+        }
         throw new TypeError("headerProvider must return headers synchronously, not a promise");
     }
     if (typeof result !== "object" || Array.isArray(result)) {

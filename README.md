@@ -385,7 +385,11 @@ with or without this SDK. To turn the helper off, leave out `headerProvider`.
 
 **Your own trace IDs.** The API accepts only a valid `traceparent` (version `00`:
 32 hex digits of trace ID, 16 of parent ID, 2 of flags). Convert your IDs; an
-invalid value is ignored by the API, and the request gets a new trace ID.
+invalid value is ignored by the API, and the request gets a new trace ID. If the
+http instrumentation is active, it replaces the `traceparent` on both WebSocket
+handshakes with its own client span's, which belongs to the active span's trace (or
+to a new trace when no span is active), so a provider's trace survives there only if
+it is the active span's.
 
 ```typescript
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -411,35 +415,47 @@ const fishAudio = new FishAudioClient({
 **No tracing.** Nothing to do.
 
 For one call, pass `headers` in the request options, on HTTP and WebSocket calls
-alike. They win over the provider:
+alike. They win over the provider, and `null` sends no such header for that call:
 
 ```typescript
 await fishAudio.textToSpeech.convert({ text: "Hello" }, "s2.1-pro", { headers: { traceparent } });
 await fishAudio.textToSpeech.convertRealtime({ text: "" }, textStream, "s2.1-pro", { headers: { traceparent } });
 fishAudio.speechToText.convertRealtime({}, microphone(), { headers: { traceparent } });
+await fishAudio.textToSpeech.convert({ text: "Hello" }, "s2.1-pro", { headers: { traceparent: null } }); // none at all
 ```
 
 Rules:
 - The provider cannot set `Authorization`, `model`, `User-Agent`, `Content-Type`,
   `Content-Length`, `Host` or WebSocket handshake headers; those names are ignored,
-  whatever their value. The client's `headers` and per-call headers win over it.
+  whatever their value.
+- A name in the client's `headers` or in per-call `headers`, in any casing, wins over
+  it, also when its value is `null` or `undefined`, or a function that returns one:
+  then no such header is sent at all.
 - An error it throws rejects the call with that error, unchanged, before anything is
-  sent. Returning a promise, a non-object, or a non-string value throws `TypeError`.
+  sent. Returning a promise (an `async` function), a non-object, or a non-string value
+  throws `TypeError`; a promise that rejects is handled by the SDK, so its rejection
+  does not reach the process as an unhandled rejection.
 - A header value must be empty, or visible ASCII characters with spaces or tabs only
-  between them (an RFC 9110 field value, ASCII only). A value with a non-ASCII
-  character, a control character, or leading or trailing whitespace throws `TypeError`
-  before anything is sent; the message names the header, never the value. Per-call
-  `headers` on both WebSockets follow the same rule.
+  between them (an RFC 9110 field value, ASCII only). A value with a control
+  character, a non-ASCII character, or leading or trailing whitespace throws
+  `TypeError` before anything is sent; the message names the header, never the value,
+  and of several problems the first in that order. Per-call `headers` on both WebSockets
+  follow the same rule, and so do the client's `headers` (other than `User-Agent`) on
+  the text-to-speech WebSocket, which sends them only since this release.
 - It runs on every attempt, synchronously, so keep it fast and free of I/O.
 
 **If the trace is not continued.** Text-to-speech and speech-to-text responses (HTTP,
-errors and both WebSocket handshakes) carry `x-fish-trace-id`, the trace ID Fish Audio
-used; when it differs from the `traceparent` the SDK sent, the SDK warns once per
-process with a `FishAudioTraceWarning` (code `FISH_AUDIO_TRACE_NOT_CONTINUED`).
-The cause is almost always two `traceparent` headers (`openTelemetryHeaders` together
-with the undici instrumentation: keep only one) or a value that is not a valid
-`traceparent`. Fix the cause, or silence it with
-`node --disable-warning=FISH_AUDIO_TRACE_NOT_CONTINUED`.
+errors, and both WebSocket handshakes, accepted or refused) carry `x-fish-trace-id`,
+the trace ID Fish Audio used; when it is not the trace in the `traceparent` the SDK
+sent, the SDK warns once per process with a `FishAudioTraceWarning` (code
+`FISH_AUDIO_TRACE_NOT_CONTINUED`) naming the trace IDs involved. On HTTP the SDK cannot
+see the headers `fetch` sent, so the warning lists the possible causes: the undici
+instrumentation appended a second `traceparent` (with `openTelemetryHeaders` or any
+provider that returns one: keep only one of the two), or the value is not one the API
+accepts. On the WebSocket handshakes the SDK reads the `traceparent` that left the
+process and says which it was: replaced on the way out (the http instrumentation, see
+above), or sent unchanged and not accepted by the API. Fix the cause, or silence it
+with `node --disable-warning=FISH_AUDIO_TRACE_NOT_CONTINUED`.
 
 ## License
 

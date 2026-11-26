@@ -6,11 +6,10 @@ export function mergeHeaders<THeaderValue>(
     for (const [key, value] of headersArray
         .filter((headers) => headers != null)
         .flatMap((headers) => Object.entries(headers))) {
-        if (value != null) {
-            result[key] = value;
-        } else if (key in result) {
-            delete result[key];
-        }
+        // A null or undefined value is kept rather than deleted: the header is
+        // still not sent, and the fetcher can tell that the caller named it, so
+        // the header provider does not add it back.
+        result[key] = value;
     }
 
     return result;

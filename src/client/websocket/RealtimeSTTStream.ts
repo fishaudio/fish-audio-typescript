@@ -5,7 +5,7 @@ import { types } from "node:util";
 import * as apiErrors from "../../api/errors/index.js";
 import { FishAudioError } from "../../errors/FishAudioError.js";
 import { RealtimeSTTError } from "../../errors/RealtimeSTTError.js";
-import { checkTraceContinued, TRACE_ID_RESPONSE_HEADER } from "../../core/traceContinuation.js";
+import { checkHandshakeTrace } from "./handshakeTrace.js";
 import type {
     RealtimeSTTAudioInput,
     RealtimeSTTConfigureRequest,
@@ -362,18 +362,17 @@ export class RealtimeSTTStream implements AsyncIterableIterator<RealtimeSTTEvent
         let websocket: WebSocket;
         try {
             // Throws at once for a malformed URL or a header value that HTTP does not allow.
-            websocket = new WebSocket(params.url, { headers: params.headers });
+            // finishRequest checks the handshake response, accepted or refused,
+            // against the trace we sent.
+            websocket = new WebSocket(params.url, {
+                headers: params.headers,
+                finishRequest: checkHandshakeTrace(params.headers),
+            });
         } catch (error) {
             this.#end(connectionError("Could not open the realtime connection", toError(error)));
             return;
         }
         this.#websocket = websocket;
-        const sentHeaders = params.headers;
-        const checkTrace = (response: IncomingMessage) =>
-            checkTraceContinued(sentHeaders, () => response.headers[TRACE_ID_RESPONSE_HEADER]);
-
-        // The handshake response, accepted or refused: did Fish Audio continue a trace we sent?
-        websocket.on("upgrade", checkTrace);
 
         // A handler that throws would throw out of the socket's event emitter,
         // past the stream and into the process, so each one is guarded.
@@ -408,7 +407,6 @@ export class RealtimeSTTStream implements AsyncIterableIterator<RealtimeSTTEvent
         websocket.on(
             "unexpected-response",
             this.#guarded((request: ClientRequest, response: IncomingMessage) => {
-                checkTrace(response);
                 void readRefusalBody(response).then(
                     this.#guarded((body: unknown) => {
                         request.destroy();

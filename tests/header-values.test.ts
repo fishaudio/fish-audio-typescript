@@ -11,7 +11,7 @@ import { FishAudioClient, RealtimeEvents } from "../src/index.js";
 import { startRealtimeServer, type FakeServer } from "./realtimeServer.js";
 
 type Path = "http" | "tts" | "stt";
-type Source = "provider" | "call";
+type Source = "provider" | "call" | "client";
 
 /** Every value a request carried for a header name, without regard to case. */
 function valuesIn(rawHeaders: string[], name: string): string[] {
@@ -85,7 +85,7 @@ async function send(
     const client = new FishAudioClient({
         apiKey: "test-key",
         baseUrl: path === "stt" ? realtime.url : api.url,
-        headers: clientHeaders,
+        headers: source === "client" ? headers : clientHeaders,
         headerProvider: source === "provider" ? () => headers : undefined,
     });
     const call = source === "call" ? { headers } : {};
@@ -123,7 +123,11 @@ function expectRejected(
 ): void {
     expect(result.arrived).toBeUndefined();
     expect(result.error).toBeInstanceOf(TypeError);
-    const prefix = source === "provider" ? "headerProvider returned" : "requestOptions.headers has";
+    const prefix = {
+        provider: "headerProvider returned",
+        call: "requestOptions.headers has",
+        client: "the client's headers have",
+    }[source];
     // The whole message is fixed text plus the header name, so no part of the value is in it.
     expect((result.error as TypeError).message).toBe(`${prefix} a value with ${kind} for header ${JSON.stringify(name)}`);
     expect(String(result.error)).not.toContain(value);
@@ -156,6 +160,9 @@ const ROUTES: Array<[Source, Path]> = [
     ["provider", "stt"],
     ["call", "tts"],
     ["call", "stt"],
+    // The TTS handshake sends the client's headers only since the header
+    // provider was added, so they follow the same rule there.
+    ["client", "tts"],
 ];
 
 describe.each(ROUTES)("header values from the %s on %s", (source, path) => {
@@ -170,6 +177,31 @@ describe.each(ROUTES)("header values from the %s on %s", (source, path) => {
         ["every visible ASCII character", Array.from({ length: 94 }, (_, i) => String.fromCharCode(0x21 + i)).join("")],
     ])("%s is sent byte-for-byte", async (_, value) => {
         expectSent(await send(path, source, { "x-probe": value }), "x-probe", value);
+    });
+});
+
+// One problem is reported, by a fixed precedence wherever it is in the value:
+// a control character, then a non-ASCII character, then leading or trailing
+// whitespace.
+const MIXED: Array<[label: string, value: string, kind: (typeof KINDS)[number]]> = [
+    ["all three", ` ${SECRET}é\x01 `, "a control character"],
+    ["non-ASCII and edge whitespace", ` ${SECRET}é `, "a non-ASCII character"],
+    ["control and edge whitespace", `\t${SECRET}\n`, "a control character"],
+    ["control after non-ASCII", `${SECRET}日\x7f`, "a control character"],
+    ["non-Latin-1 and a trailing tab", `${SECRET}日本\t`, "a non-ASCII character"],
+];
+
+describe.each(ROUTES)("a value with several problems from the %s on %s", (source, path) => {
+    it.each(MIXED)("%s: reports the first by precedence", async (_, value, kind) => {
+        expectRejected(await send(path, source, { "x-probe": value }), source, "x-probe", value, kind);
+    });
+});
+
+describe("the client's User-Agent on the TTS handshake", () => {
+    it("is not checked: it was sent before the header provider existed, appended to the SDK's", async () => {
+        const result = await send("tts", "client", { "User-Agent": "my-app café" });
+        expect(result.error).toBeUndefined();
+        expect(valuesIn(result.arrived!, "user-agent")[0]).toMatch(/ my-app café$/);
     });
 });
 

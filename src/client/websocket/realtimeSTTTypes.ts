@@ -96,9 +96,11 @@ export interface RealtimeSTTRequestOptions {
     timeoutInSeconds?: number;
     /**
      * Additional headers for the WebSocket handshake. They are merged as on HTTP
-     * requests: they win over the client's `headers` and its `headerProvider`.
-     * A value must be empty, or visible ASCII with spaces or tabs only between
-     * characters; any other value throws `TypeError` before connecting.
+     * requests: they win over the client's `headers` and its `headerProvider`,
+     * and a `null` or `undefined` value sends no such header (the provider does
+     * not add it back). A value must be empty, or visible ASCII with spaces or
+     * tabs only between characters; any other value throws `TypeError` before
+     * connecting.
      */
     headers?: Record<string, string | Supplier<string | null | undefined> | null | undefined>;
 }

@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { FishAudioClient, FishAudioError, RealtimeEvents, type HeaderProvider } from "../src/index.js";
 import { SDK_USER_AGENT } from "../src/core/userAgent.js";
 import { startRealtimeServer, type FakeServer } from "./realtimeServer.js";
+import { childSdk } from "./childProcess.js";
 
 const TRACE_A = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
 const TRACE_B = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01";
@@ -365,5 +366,104 @@ describe("header provider on the realtime STT WebSocket", () => {
 
         await expect(drain(client.speechToText.convertRealtime({}, []))).rejects.toBe(error);
         expect(server.connections).toEqual([]);
+    });
+});
+
+describe("an async header provider", () => {
+    // In a separate process: there an unhandled rejection ends Node with exit
+    // code 1 (the default since Node 15), which the test runner would hide.
+    const CALLS = {
+        HTTP: "await client.user.get_api_credit({ maxRetries: 0 })",
+        "TTS WebSocket": 'await client.textToSpeech.convertRealtime({ text: "" }, [])',
+        "STT WebSocket": "for await (const _ of client.speechToText.convertRealtime({}, [])) {}",
+    };
+
+    it.each(Object.entries(CALLS))(
+        "that rejects: on %s the caller catches the TypeError and the process exits normally",
+        async (_, call) => {
+            const child = await childSdk();
+            try {
+                const result = await child.run(`
+                    const client = new sdk.FishAudioClient({
+                        apiKey: "test-key",
+                        baseUrl: "http://127.0.0.1:9",
+                        headerProvider: async () => { throw new Error("provider-rejection"); },
+                    });
+                    (async () => {
+                        try {
+                            ${call};
+                            console.log("no error");
+                        } catch (error) {
+                            console.log("caught " + error.name + ": " + error.message);
+                        }
+                        // Time for an unhandled rejection to surface and end the process.
+                        await new Promise((resolve) => setTimeout(resolve, 100));
+                        console.log("still running");
+                    })();
+                `);
+                expect(result).toEqual({
+                    code: 0,
+                    stdout: "caught TypeError: headerProvider must return headers synchronously, not a promise\nstill running\n",
+                    stderr: "",
+                });
+            } finally {
+                await child.close();
+            }
+        },
+        30_000,
+    );
+});
+
+describe("a header named in the client's or per-call headers wins over the provider, even when removed", () => {
+    const provider: HeaderProvider = () => ({ traceparent: TRACE_A, "x-other": "p" });
+
+    it.each([
+        ["per-call null", {}, { traceparent: null }],
+        ["per-call undefined", {}, { traceparent: undefined }],
+        ["per-call supplier returning null", {}, { traceparent: () => null }],
+        ["client null", { traceparent: null }, {}],
+        ["client undefined", { traceparent: undefined }, {}],
+        ["client value, per-call null", { traceparent: TRACE_B }, { traceparent: null }],
+    ])("HTTP, %s: no traceparent is sent", async (_, clientHeaders, callHeaders) => {
+        const api = await fakeApi();
+        const client = new FishAudioClient({
+            apiKey: "test-key",
+            baseUrl: api.url,
+            headers: clientHeaders as Record<string, string | null | undefined>,
+            headerProvider: provider,
+        });
+        await client.user.get_api_credit({ headers: callHeaders as Record<string, string | null | undefined> });
+        await client.textToSpeech.convert({ text: "hi" }, "s2-pro", {
+            headers: callHeaders as Record<string, string | null | undefined>,
+        });
+        expect(api.requests.length).toBe(2);
+        for (const request of api.requests) {
+            expect(headerValues(request, "traceparent")).toEqual([]);
+            expect(headerValues(request, "x-other")).toEqual(["p"]);
+        }
+    });
+
+    it.each([
+        ["per-call null", {}, { TraceParent: null }],
+        ["per-call undefined", {}, { traceparent: undefined }],
+        ["client null", { traceparent: null }, {}],
+        ["client value, per-call null", { traceparent: TRACE_B }, { traceparent: null }],
+    ])("both WebSocket handshakes, %s: no traceparent is sent", async (_, clientHeaders, callHeaders) => {
+        const api = await fakeApi();
+        const server = await realtimeServer();
+        const options = {
+            apiKey: "test-key",
+            headers: clientHeaders as Record<string, string | null | undefined>,
+            headerProvider: provider,
+        };
+        const call = { headers: callHeaders as Record<string, string | null | undefined> };
+        await ttsHandshake(new FishAudioClient({ ...options, baseUrl: api.url }), "s2-pro", call);
+        await drain(new FishAudioClient({ ...options, baseUrl: server.url }).speechToText.convertRealtime({}, [], call));
+        const handshakes = [api.requests[0]!.rawHeaders, server.connections[0]!.rawHeaders];
+        for (const rawHeaders of handshakes) {
+            const names = rawHeaders.filter((_, i) => i % 2 === 0).map((name) => name.toLowerCase());
+            expect(names).not.toContain("traceparent");
+            expect(names).toContain("x-other");
+        }
     });
 });

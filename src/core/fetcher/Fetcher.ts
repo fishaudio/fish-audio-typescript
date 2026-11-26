@@ -83,8 +83,12 @@ async function getHeaders(args: Fetcher.Args): Promise<Record<string, string>> {
         newHeaders[key] = `${result}`;
     }
     // Last, and once per attempt, so the provider sees the caller's context at
-    // the moment this attempt is sent; every header set so far wins over it.
-    Object.assign(newHeaders, providedHeaders(args.headerProvider, Object.keys(newHeaders)));
+    // the moment this attempt is sent. Every header named so far wins over it,
+    // also one the caller removed with null or undefined (not sent at all).
+    Object.assign(
+        newHeaders,
+        providedHeaders(args.headerProvider, [...Object.keys(newHeaders), ...Object.keys(args.headers)]),
+    );
     // Every HTTP request goes through here, also from a resource client built without FishAudioClient.
     return withUserAgent(newHeaders);
 }
