@@ -80,6 +80,24 @@ describe.each([
         expect(connection.headerValues("x-added")).toEqual(["call"]);
     });
 
+    it("compares header names without regard to case, and does not call a replaced supplier", async () => {
+        const server = await serve();
+        let called = false;
+        const fish = client(server, {
+            Traceparent: () => ((called = true), "client"),
+            "X-Removed": "client",
+            "x-twice": "first",
+            "X-Twice": "second",
+        });
+
+        const connection = await open(server, fish, { traceparent: "call", "x-removed": null, "X-TWICE": "call" });
+
+        expect(called).toBe(false);
+        expect(connection.headerValues("traceparent")).toEqual(["call"]);
+        expect(connection.headerValues("x-removed")).toEqual([]);
+        expect(connection.headerValues("x-twice")).toEqual(["call"]);
+    });
+
     it("Authorization and model from the client or the call do not replace the SDK's, and their suppliers are not called", async () => {
         const server = await serve();
         const called: string[] = [];
