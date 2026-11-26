@@ -75,6 +75,12 @@ async function getHeaders(args: Fetcher.Args): Promise<Record<string, string>> {
     for (const [key, value] of Object.entries(args.headers)) {
         const result = await EndpointSupplier.get(value, { endpointMetadata: args.endpointMetadata ?? {} });
         if (result == null) {
+            // Removed, also a header set above: the Content-Type of the body.
+            for (const existing of Object.keys(newHeaders)) {
+                if (existing.toLowerCase() === key.toLowerCase()) {
+                    delete newHeaders[existing];
+                }
+            }
             continue;
         }
         // Without regard to case, so fetch never joins two spellings into one value.

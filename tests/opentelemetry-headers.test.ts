@@ -1,6 +1,6 @@
 /// <reference types="node" />
 // First: OpenTelemetry and the instrumentations must be in place before `ws` loads.
-import { exporter, provider, undici } from "./otelSetup.js";
+import { exporter, http as httpInstrumentation, provider, undici } from "./otelSetup.js";
 import * as otel from "@opentelemetry/api";
 import { createServer, type IncomingMessage, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -203,6 +203,44 @@ describe("openTelemetryHeaders", () => {
             expect(clientSpanFor(sent!)?.parentSpanContext?.spanId).toBe(outer.spanContext().spanId);
         }
         // The helper alone: Fish Audio continued the trace everywhere, so no warning.
+        expect(traceWarnings()).toEqual([]);
+    });
+});
+
+describe("openTelemetryHeaders without any HTTP instrumentation", () => {
+    it("sends exactly the active span's traceparent on HTTP and both WebSocket handshakes", async () => {
+        httpInstrumentation.disable();
+        cleanups.push(async () => httpInstrumentation.enable());
+        const api = await fakeApi();
+        const stt = await startRealtimeServer(
+            async (connection) => {
+                await connection.start();
+                await connection.until("audio_done");
+                connection.done();
+            },
+            { traceId: gatewayTraceId },
+        );
+        cleanups.push(() => stt.close());
+        const provide = openTelemetryHeaders(otel);
+        const client = new FishAudioClient({ apiKey: "k", baseUrl: api.url, headerProvider: provide });
+        const sttClient = new FishAudioClient({ apiKey: "k", baseUrl: stt.url, headerProvider: provide });
+
+        const outer = await tracer.startActiveSpan("outer", async (span) => {
+            await client.user.get_api_credit();
+            await ttsHandshake(client);
+            for await (const _ of sttClient.speechToText.convertRealtime({}, [])) {
+                // drain
+            }
+            span.end();
+            return span;
+        });
+
+        const [http, tts] = api.requests;
+        for (const rawHeaders of [http!.rawHeaders, tts!.rawHeaders, stt.connections[0]!.rawHeaders]) {
+            expect(traceparents(rawHeaders)).toEqual([traceparentOf(outer)]);
+        }
+        // No instrumentation span was made for any of them.
+        expect(exporter.getFinishedSpans().map((span) => span.name)).toEqual(["outer"]);
         expect(traceWarnings()).toEqual([]);
     });
 });

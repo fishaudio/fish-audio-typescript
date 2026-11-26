@@ -1,11 +1,12 @@
 import * as core from "../../core/index.js";
 import { checkHeader, HeaderProviderFailure, providedHeaders } from "../../core/headerProvider.js";
-import { setHeaderIgnoringCase } from "../../core/headers.js";
+import { ignoreRejection, setHeaderIgnoringCase } from "../../core/headers.js";
 import { withUserAgent } from "../../core/userAgent.js";
 
 type HeaderSource = Record<string, string | core.Supplier<string | null | undefined> | null | undefined>;
 
 type Source = "client" | "sdk" | "call";
+type Candidate = { source: Source; supplier: HeaderSource[string] };
 
 /**
  * The headers of a WebSocket handshake, merged in the same order as on HTTP
@@ -20,7 +21,8 @@ type Source = "client" | "sdk" | "call";
  *
  * Which source wins each name is decided first; only then are the winners'
  * suppliers run and their values checked, so a client header that the call
- * replaces or removes is never resolved and cannot fail the call. In 1 and 3,
+ * replaces or removes is never resolved and cannot fail the call (a promise
+ * among the losers only gets its rejection handled). In 1 and 3,
  * a `null` or `undefined` value (or a supplier returning one) removes the
  * header, and the provider does not add it back.
  *
@@ -41,19 +43,23 @@ export async function handshakeHeaders(params: {
     const sdkNames = new Set(Object.keys(params.sdkHeaders).map((name) => name.toLowerCase()));
     // Every name the caller listed, removed and replaced ones included: the provider may not set them.
     const named: string[] = [];
-    const winners: Record<string, { source: Source; supplier: HeaderSource[string] }> = {};
+    const winners: Record<string, Candidate> = {};
+    // A value that loses is dropped unused, its rejection handled if it is a promise.
+    const dropped = (loser: Candidate) => ignoreRejection(loser.supplier);
     for (const [name, supplier] of Object.entries(params.clientHeaders ?? {})) {
         named.push(name);
-        if (!sdkNames.has(name.toLowerCase())) {
-            setHeaderIgnoringCase(winners, name, { source: "client", supplier });
+        if (sdkNames.has(name.toLowerCase())) {
+            ignoreRejection(supplier);
+        } else {
+            setHeaderIgnoringCase(winners, name, { source: "client", supplier }, dropped);
         }
     }
     for (const [name, value] of Object.entries(params.sdkHeaders)) {
-        setHeaderIgnoringCase(winners, name, { source: "sdk", supplier: value });
+        setHeaderIgnoringCase(winners, name, { source: "sdk", supplier: value }, dropped);
     }
     for (const [name, supplier] of Object.entries(params.requestHeaders ?? {})) {
         named.push(name);
-        setHeaderIgnoringCase(winners, name, { source: "call", supplier });
+        setHeaderIgnoringCase(winners, name, { source: "call", supplier }, dropped);
     }
 
     const headers: Record<string, string> = {};

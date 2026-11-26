@@ -558,3 +558,82 @@ describe("WebSockets: a client header that a per-call header replaces or removes
         expect(api.requests).toEqual([]);
     });
 });
+
+describe("a client header value that is a promise and loses to another source", () => {
+    // In a separate process, as for async providers: a promise the SDK drops
+    // without a handler would end Node with an unhandled rejection when it
+    // later rejects. The SDK neither awaits nor uses it; it only handles the rejection.
+    const VARIANTS = {
+        "two spellings in the client's headers": ['{ "X-Context": later, "x-context": "override" }', "{}"],
+        "replaced per call in another casing": ['{ "X-Context": later }', '{ "x-context": "override" }'],
+        "replaced per call in the same casing": ['{ "X-Context": later }', '{ "X-Context": "override" }'],
+        "replaced by the SDK's Authorization": ["{ Authorization: later }", "{}"],
+    };
+    const PATHS = {
+        // A short timeout: a failed fetch leaves the SDK's timeout timer running
+        // (a separate issue), which would keep the process alive that long.
+        HTTP: "await client.user.get_api_credit({ headers: perCall, maxRetries: 0, timeoutInSeconds: 0.3 }).catch(() => {});",
+        "TTS WebSocket": `
+            const connection = await client.textToSpeech.convertRealtime({ text: "" }, [], "s2-pro", { headers: perCall });
+            await new Promise((resolve) => { connection.on("error", resolve); connection.on("close", resolve); });`,
+        "STT WebSocket": `
+            try { for await (const _ of client.speechToText.convertRealtime({}, [], { headers: perCall })) {} } catch {}`,
+    };
+    const cases = Object.entries(PATHS).flatMap(([path, call]) =>
+        Object.entries(VARIANTS).map(([variant, [clientHeaders, perCall]]) => [path, variant, call, clientHeaders, perCall] as const),
+    );
+
+    it.each(cases)("%s, %s: the process exits normally", async (_, __, call, clientHeaders, perCall) => {
+        const child = await childSdk();
+        try {
+            const result = await child.run(`
+                const later = new Promise((_, reject) => setTimeout(() => reject(new Error("discarded-rejection")), 20));
+                const client = new sdk.FishAudioClient({ apiKey: "test-key", baseUrl: "http://127.0.0.1:9", headers: ${clientHeaders} });
+                const perCall = ${perCall};
+                (async () => {
+                    ${call}
+                    console.log("done");
+                    await new Promise((resolve) => setTimeout(resolve, 100));
+                    console.log("still running");
+                })();
+            `);
+            expect(result).toEqual({ code: 0, stdout: "done\nstill running\n", stderr: "" });
+        } finally {
+            await child.close();
+        }
+    }, 30_000);
+});
+
+describe("null removes a header the SDK sets, too", () => {
+    it.each([
+        ["per-call Content-Type: null", {}, { "Content-Type": null }],
+        ["per-call content-type: null", {}, { "content-type": null }],
+        ["client Content-Type: null", { "Content-Type": null }, {}],
+    ])("HTTP TTS, %s: no Content-Type is sent", async (_, clientHeaders, perCall) => {
+        const api = await fakeApi();
+        const client = new FishAudioClient({ apiKey: "test-key", baseUrl: api.url, headers: clientHeaders as Headers });
+        await client.textToSpeech.convert({ text: "hi" }, "s2-pro", { headers: perCall as Headers }).catch(() => {});
+        expect(headerValues(api.requests[0]!, "content-type")).toEqual([]);
+    });
+
+    it("HTTP TTS without null keeps application/msgpack", async () => {
+        const api = await fakeApi();
+        await new FishAudioClient({ apiKey: "test-key", baseUrl: api.url }).textToSpeech.convert({ text: "hi" }, "s2-pro");
+        expect(headerValues(api.requests[0]!, "content-type")).toEqual(["application/msgpack"]);
+    });
+
+    it("Authorization and model: per-call null removes them on HTTP and both handshakes", async () => {
+        const api = await fakeApi();
+        const server = await realtimeServer();
+        const perCall = { headers: { authorization: null, Model: null } as Headers };
+        await new FishAudioClient({ apiKey: "test-key", baseUrl: api.url }).textToSpeech.convert({ text: "hi" }, "s2-pro", perCall);
+        await ttsHandshake(new FishAudioClient({ apiKey: "test-key", baseUrl: api.url }), "s2-pro", perCall);
+        await drain(new FishAudioClient({ apiKey: "test-key", baseUrl: server.url }).speechToText.convertRealtime({}, [], perCall)).catch(() => {});
+        const sent = [api.requests[0]!.rawHeaders, api.requests[1]!.rawHeaders, server.connections[0]?.rawHeaders ?? []];
+        for (const rawHeaders of sent) {
+            const names = rawHeaders.filter((_, i) => i % 2 === 0).map((name) => name.toLowerCase());
+            expect(names).not.toContain("authorization");
+            expect(names).not.toContain("model");
+        }
+    });
+});

@@ -1,6 +1,6 @@
 import * as environments from "../../../environments.js";
 import * as core from "../../../core/index.js";
-import { mergeHeaders, mergeOnlyDefinedHeaders } from "../../../core/headers.js";
+import { ignoreRejection, mergeHeaders, mergeOnlyDefinedHeaders } from "../../../core/headers.js";
 import * as errors from "../../../errors/index.js";
 import * as apiErrors from "../../../api/errors/index.js";
 import { STTRequest } from "./requests/STTRequest.js";
@@ -165,6 +165,9 @@ export function withModelHeader<THeaderValue>(
     for (const [key, value] of Object.entries(headers)) {
         if (key.toLowerCase() !== "model") {
             result[key] = value;
+        } else {
+            // Replaced by request.model, so dropped unused.
+            ignoreRejection(value);
         }
     }
     result.model = model;
