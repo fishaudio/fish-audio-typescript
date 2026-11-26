@@ -13,6 +13,11 @@
  * `Content-Length`, `Host`, WebSocket handshake headers) cannot be set by it,
  * and the client's `headers` and per-call `requestOptions.headers` win over it.
  * An error it throws fails the call, unchanged, before anything is sent.
+ *
+ * Do not return `traceparent` while `@opentelemetry/instrumentation-undici`
+ * is active: it appends a second one and Fish Audio starts a new trace. The SDK
+ * notices from the `x-fish-trace-id` response header and warns once per process
+ * (`FishAudioTraceWarning`, code `FISH_AUDIO_TRACE_NOT_CONTINUED`).
  */
 export type HeaderProvider = () => Record<string, string | null | undefined> | null | undefined;
 

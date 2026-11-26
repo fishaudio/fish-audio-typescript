@@ -5,17 +5,38 @@ import * as otel from "@opentelemetry/api";
 import { createServer, type IncomingMessage, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { WebSocketServer } from "ws";
-import { afterEach, describe, expect, it } from "vitest";
+import { randomBytes } from "node:crypto";
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import { AlwaysOffSampler, BasicTracerProvider } from "@opentelemetry/sdk-trace-base";
 import { FishAudioClient, RealtimeEvents, openTelemetryHeaders, type OpenTelemetryApi } from "../src/index.js";
 import { startRealtimeServer } from "./realtimeServer.js";
+import { resetTraceContinuationWarning, traceIdOf } from "../src/core/traceContinuation.js";
 
 const cleanups: Array<() => Promise<void>> = [];
+let warnings: MockInstance<typeof process.emitWarning>;
+beforeEach(() => {
+    resetTraceContinuationWarning();
+    warnings = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
+});
 afterEach(async () => {
+    vi.restoreAllMocks();
+    resetTraceContinuationWarning();
     undici.disable();
     exporter.reset();
     await Promise.all(cleanups.splice(0).map((cleanup) => cleanup()));
 });
+
+function traceWarnings(): string[] {
+    return warnings.mock.calls
+        .filter(([, options]) => (options as { type?: string } | undefined)?.type === "FishAudioTraceWarning")
+        .map(([message]) => String(message));
+}
+
+/** As Fish Audio's gateway: the sent trace if exactly one valid traceparent came, else a new trace. */
+function gatewayTraceId(rawHeaders: string[]): string {
+    const sent = traceparents(rawHeaders);
+    return (sent.length === 1 ? traceIdOf(sent[0]!) : undefined) ?? randomBytes(16).toString("hex");
+}
 
 const tracer = provider.getTracer("test");
 
@@ -32,13 +53,17 @@ function traceparents(rawHeaders: string[]): string[] {
     return values;
 }
 
-/** Records every HTTP request and WebSocket upgrade; upgrades are closed at once. */
+/**
+ * Records every HTTP request and WebSocket upgrade, answering each with the
+ * gateway's `x-fish-trace-id`; upgrades are closed at once.
+ */
 async function fakeApi(): Promise<{ url: string; requests: IncomingMessage[] }> {
     const requests: IncomingMessage[] = [];
     const server: Server = createServer((request, response) => {
         requests.push(request);
         request.resume();
         request.on("end", () => {
+            response.setHeader("x-fish-trace-id", gatewayTraceId(request.rawHeaders));
             response.setHeader("Content-Type", "application/json");
             response.end("{}");
         });
@@ -46,6 +71,7 @@ async function fakeApi(): Promise<{ url: string; requests: IncomingMessage[] }> 
     const wss = new WebSocketServer({ noServer: true });
     server.on("upgrade", (request, socket, head) => {
         requests.push(request);
+        wss.once("headers", (headers) => headers.push(`x-fish-trace-id: ${gatewayTraceId(request.rawHeaders)}`));
         wss.handleUpgrade(request, socket, head, (ws) => ws.close(1000));
     });
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -120,11 +146,14 @@ describe("openTelemetryHeaders", () => {
 
     it("sends it on HTTP and both WebSocket handshakes (no undici instrumentation)", async () => {
         const api = await fakeApi();
-        const stt = await startRealtimeServer(async (connection) => {
-            await connection.start();
-            await connection.until("audio_done");
-            connection.done();
-        });
+        const stt = await startRealtimeServer(
+            async (connection) => {
+                await connection.start();
+                await connection.until("audio_done");
+                connection.done();
+            },
+            { traceId: gatewayTraceId },
+        );
         cleanups.push(() => stt.close());
         const client = new FishAudioClient({ apiKey: "k", baseUrl: api.url, headerProvider: provide });
         const sttClient = new FishAudioClient({ apiKey: "k", baseUrl: stt.url, headerProvider: provide });
@@ -149,6 +178,8 @@ describe("openTelemetryHeaders", () => {
             expect(sent!.split("-")[1]).toBe(outer.spanContext().traceId);
             expect(clientSpanFor(sent!)?.parentSpanContext?.spanId).toBe(outer.spanContext().spanId);
         }
+        // The helper alone: Fish Audio continued the trace everywhere, so no warning.
+        expect(traceWarnings()).toEqual([]);
     });
 });
 
@@ -167,6 +198,8 @@ describe("with @opentelemetry/instrumentation-undici", () => {
         const [sent, ...more] = traceparents(api.requests[0]!.rawHeaders);
         expect(more).toEqual([]);
         expect(clientSpanFor(sent!)?.parentSpanContext?.spanId).toBe(outer.spanContext().spanId);
+        // The SDK sent no traceparent of its own, so it checks nothing and says nothing.
+        expect(traceWarnings()).toEqual([]);
     });
 
     it("plus openTelemetryHeaders: TWO traceparent headers, which Fish Audio treats as none (do not combine them)", async () => {
@@ -184,5 +217,26 @@ describe("with @opentelemetry/instrumentation-undici", () => {
         expect(sent.length).toBe(2);
         expect(sent[0]).toBe(traceparentOf(outer)); // the helper's
         expect(clientSpanFor(sent[1]!)?.parentSpanContext?.spanId).toBe(outer.spanContext().spanId); // undici's
+        // Both carry the caller's trace id; only the span ids differ. The gateway
+        // still sees two headers and starts a new trace.
+        expect(sent.map((value) => value.split("-")[1])).toEqual([outer.spanContext().traceId, outer.spanContext().traceId]);
+    });
+
+    it("plus openTelemetryHeaders: the SDK sees the API did not continue the trace and warns once", async () => {
+        undici.enable();
+        const api = await fakeApi();
+        const client = new FishAudioClient({ apiKey: "k", baseUrl: api.url, headerProvider: openTelemetryHeaders(otel) });
+
+        const outer = await tracer.startActiveSpan("outer", async (span) => {
+            for (let i = 0; i < 3; i++) await client.user.get_api_credit();
+            span.end();
+            return span;
+        });
+
+        expect(api.requests.length).toBe(3);
+        const [message, ...more] = traceWarnings();
+        expect(more).toEqual([]);
+        expect(message).toContain(`sent trace id ${outer.spanContext().traceId}, the API used `);
+        expect(message).toContain("@opentelemetry/instrumentation-undici");
     });
 });

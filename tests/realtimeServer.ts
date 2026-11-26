@@ -115,7 +115,11 @@ export interface FakeServer {
  */
 export async function startRealtimeServer(
     handler: (connection: FakeConnection) => void | Promise<void>,
-    options: { refuse?: { status: number; body?: string } } = {},
+    options: {
+        refuse?: { status: number; body?: string };
+        /** Answers the handshake with this `x-fish-trace-id`, computed from the request's raw headers. */
+        traceId?: (rawHeaders: string[]) => string;
+    } = {},
 ): Promise<FakeServer> {
     const http: Server = createServer();
     const wss = new WebSocketServer({ noServer: true });
@@ -138,6 +142,10 @@ export async function startRealtimeServer(
                     body,
             );
             return;
+        }
+        const traceId = options.traceId;
+        if (traceId) {
+            wss.once("headers", (headers) => headers.push(`x-fish-trace-id: ${traceId(request.rawHeaders)}`));
         }
         wss.handleUpgrade(request, socket, head, (ws) => {
             const connection = new FakeConnection(ws, request.headers, request.rawHeaders, request.url ?? "");

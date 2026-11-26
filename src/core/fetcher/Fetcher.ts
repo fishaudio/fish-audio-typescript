@@ -1,5 +1,6 @@
 import { HeaderProviderFailure, providedHeaders, type HeaderProvider } from "../headerProvider.js";
 import { toJson } from "../json.js";
+import { checkTraceContinued, TRACE_ID_RESPONSE_HEADER } from "../traceContinuation.js";
 import { withUserAgent } from "../userAgent.js";
 import { APIResponse } from "./APIResponse.js";
 import { createRequestUrl } from "./createRequestUrl.js";
@@ -97,21 +98,23 @@ export async function fetcherImpl<R = unknown>(args: Fetcher.Args): Promise<APIR
     const fetchFn = await getFetchFn();
 
     try {
-        const response = await requestWithRetries(
-            async () =>
-                makeRequest(
-                    fetchFn,
-                    url,
-                    args.method,
-                    await getHeaders(args),
-                    requestBody,
-                    args.timeoutMs,
-                    args.abortSignal,
-                    args.withCredentials,
-                    args.duplex,
-                ),
-            args.maxRetries,
-        );
+        const response = await requestWithRetries(async () => {
+            const headers = await getHeaders(args);
+            const attempt = await makeRequest(
+                fetchFn,
+                url,
+                args.method,
+                headers,
+                requestBody,
+                args.timeoutMs,
+                args.abortSignal,
+                args.withCredentials,
+                args.duplex,
+            );
+            // Every attempt, error responses included; synchronous and never throws.
+            checkTraceContinued(headers, () => attempt.headers.get(TRACE_ID_RESPONSE_HEADER));
+            return attempt;
+        }, args.maxRetries);
 
         if (response.status >= 200 && response.status < 400) {
             return {

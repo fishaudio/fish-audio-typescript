@@ -41,7 +41,11 @@ const SPAN_ID = /^[0-9a-f]{16}$/;
  * `auto-instrumentations-node`): that instrumentation already adds a
  * `traceparent` to every HTTP request, a second one is appended rather than
  * replaced, and Fish Audio treats a request with two as having none and starts
- * a new trace. With undici instrumentation you need no header provider.
+ * a new trace. With undici instrumentation you need no header provider. If you
+ * combine them anyway, the SDK sees from the `x-fish-trace-id` response header
+ * that the trace was not continued and warns once per process
+ * (`FishAudioTraceWarning`, code `FISH_AUDIO_TRACE_NOT_CONTINUED`); remove one
+ * of the two to fix it.
  */
 export function openTelemetryHeaders(api: OpenTelemetryApi): HeaderProvider {
     return () => {

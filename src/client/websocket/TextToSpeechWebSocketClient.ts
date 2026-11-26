@@ -4,6 +4,7 @@ import { RealtimeConnection, StartEvent, TextEvent, CloseEvent } from "./connect
 import * as core from "../../core/index.js";
 import * as environments from "../../environments.js";
 import { handshakeHeaders } from "./handshakeHeaders.js";
+import { checkTraceContinued, TRACE_ID_RESPONSE_HEADER } from "../../core/traceContinuation.js";
 import { TTSRequest } from "../../api/resources/textToSpeech/requests/TTSRequest.js";
 import { Backends } from "../../api/resources/textToSpeech/Client.js";
 
@@ -99,6 +100,13 @@ export class TextToSpeechWebSocket extends TextToSpeech {
 
         return new Promise((resolve) => {
             const websocket = new WebSocket(uri, { headers });
+            // The handshake response: did Fish Audio continue a trace we sent?
+            // A refused handshake (no listener for "unexpected-response" here, so
+            // ws turns it into an "error") is not checked: listening for it
+            // would take over handling the refusal from ws.
+            websocket.on("upgrade", (response) =>
+                checkTraceContinued(headers, () => response.headers[TRACE_ID_RESPONSE_HEADER]),
+            );
 
             // Attach websocket to connection immediately so error handlers are registered
             // This ensures errors during handshake (like 403) are properly emitted via event emitter

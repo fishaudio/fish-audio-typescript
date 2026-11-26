@@ -27,7 +27,13 @@ export declare namespace FishAudioClient {
          * error it throws fails the call unchanged. Do not return `traceparent`
          * when `@opentelemetry/instrumentation-undici` is active: it adds its own,
          * and two make the API start a new trace. For OpenTelemetry without HTTP
-         * instrumentation, use `openTelemetryHeaders(api)`. See the README's "Tracing".
+         * instrumentation, use `openTelemetryHeaders(api)`.
+         *
+         * When the API did not continue a `traceparent` the SDK sent (its
+         * `x-fish-trace-id` response header names another trace), the SDK warns
+         * once per process: a `FishAudioTraceWarning`, code
+         * `FISH_AUDIO_TRACE_NOT_CONTINUED`. Usual cause: the undici instrumentation
+         * plus this provider; keep only one. See the README's "Tracing".
          */
         headerProvider?: HeaderProvider;
     }

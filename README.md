@@ -426,6 +426,15 @@ Rules:
   as does a value with a line break.
 - It runs on every attempt, synchronously, so keep it fast and free of I/O.
 
+**If the trace is not continued.** Text-to-speech and speech-to-text responses (HTTP,
+errors and both WebSocket handshakes) carry `x-fish-trace-id`, the trace ID Fish Audio
+used; when it differs from the `traceparent` the SDK sent, the SDK warns once per
+process with a `FishAudioTraceWarning` (code `FISH_AUDIO_TRACE_NOT_CONTINUED`).
+The cause is almost always two `traceparent` headers (`openTelemetryHeaders` together
+with the undici instrumentation: keep only one) or a value that is not a valid
+`traceparent`. Fix the cause, or silence it with
+`node --disable-warning=FISH_AUDIO_TRACE_NOT_CONTINUED`.
+
 ## License
 
 This project is licensed under the Apache-2.0 License - see the [LICENSE](LICENSE) file for details.
