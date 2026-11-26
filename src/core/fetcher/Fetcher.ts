@@ -1,4 +1,5 @@
 import { HeaderProviderFailure, providedHeaders, type HeaderProvider } from "../headerProvider.js";
+import { setHeaderIgnoringCase } from "../headers.js";
 import { toJson } from "../json.js";
 import { checkTraceContinued, TRACE_ID_RESPONSE_HEADER } from "../traceContinuation.js";
 import { withUserAgent } from "../userAgent.js";
@@ -73,14 +74,11 @@ async function getHeaders(args: Fetcher.Args): Promise<Record<string, string>> {
 
     for (const [key, value] of Object.entries(args.headers)) {
         const result = await EndpointSupplier.get(value, { endpointMetadata: args.endpointMetadata ?? {} });
-        if (typeof result === "string") {
-            newHeaders[key] = result;
-            continue;
-        }
         if (result == null) {
             continue;
         }
-        newHeaders[key] = `${result}`;
+        // Without regard to case, so fetch never joins two spellings into one value.
+        setHeaderIgnoringCase(newHeaders, key, typeof result === "string" ? result : `${result}`);
     }
     // Last, and once per attempt, so the provider sees the caller's context at
     // the moment this attempt is sent. Every header named so far wins over it,

@@ -128,6 +128,36 @@ describe("openTelemetryHeaders", () => {
         expect(openTelemetryHeaders(broken)()).toBeUndefined();
     });
 
+    it("lower-cases uppercase ids from a wrapped span context, through the real context manager", async () => {
+        const upper = { traceId: "4BF92F3577B34DA6A3CE929D0E0E4736", spanId: "00F067AA0BA902B7", traceFlags: 1 };
+        // @opentelemetry/api itself accepts these ids.
+        expect(otel.trace.isSpanContextValid(upper)).toBe(true);
+        const api = await fakeApi();
+        const client = new FishAudioClient({ apiKey: "k", baseUrl: api.url, headerProvider: provide });
+        const wrapped = otel.trace.setSpan(otel.context.active(), otel.trace.wrapSpanContext(upper));
+        const lower = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
+        await otel.context.with(wrapped, async () => {
+            expect(provide()).toEqual({ traceparent: lower });
+            await client.user.get_api_credit();
+        });
+        expect(traceparents(api.requests[0]!.rawHeaders)).toEqual([lower]);
+        expect(traceWarnings()).toEqual([]);
+    });
+
+    it("sends nothing for ids that are not hex of the right length, whatever isSpanContextValid says", () => {
+        for (const context of [
+            { traceId: "4bf92f3577b34da6a3ce929d0e0e473g", spanId: "00f067aa0ba902b7", traceFlags: 1 },
+            { traceId: "4bf92f3577b34da6a3ce929d0e0e4736", spanId: "00f067aa0ba902b", traceFlags: 1 },
+            { traceId: "4bf92f3577b34da6a3ce929d0e0e4736 ", spanId: "00f067aa0ba902b7", traceFlags: 1 },
+            { traceId: "0".repeat(32), spanId: "00f067aa0ba902b7", traceFlags: 1 },
+        ]) {
+            const lenient: OpenTelemetryApi = {
+                trace: { getActiveSpan: () => ({ spanContext: () => context }), isSpanContextValid: () => true },
+            };
+            expect(openTelemetryHeaders(lenient)()).toBeUndefined();
+        }
+    });
+
     it("works with a minimal API object without isSpanContextValid", () => {
         const context = { traceId: "4bf92f3577b34da6a3ce929d0e0e4736", spanId: "00f067aa0ba902b7", traceFlags: 1 };
         const minimal: OpenTelemetryApi = { trace: { getActiveSpan: () => ({ spanContext: () => context }) } };

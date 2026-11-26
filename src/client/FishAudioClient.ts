@@ -15,7 +15,11 @@ export declare namespace FishAudioClient {
         baseUrl?: Supplier<string>;
         /** Override the Authorization header */
         apiKey?: Supplier<string | undefined>;
-        /** Additional headers to include in requests. */
+        /**
+         * Additional headers to include in requests. Names are compared without
+         * regard to case; per-call `requestOptions.headers` replace or remove
+         * (with `null`) a header of the same name in any casing.
+         */
         headers?: Record<string, string | Supplier<string | null | undefined> | null | undefined>;
         /**
          * Called for every HTTP request (once per attempt) and every WebSocket

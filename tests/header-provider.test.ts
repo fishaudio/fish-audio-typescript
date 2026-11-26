@@ -467,3 +467,94 @@ describe("a header named in the client's or per-call headers wins over the provi
         }
     });
 });
+
+type Headers = Record<string, string | (() => string | null) | null | undefined>;
+
+/** Every HTTP path type: GET JSON, GET with a query, POST JSON streaming audio back, multipart upload. */
+const HTTP_CALLS: Record<string, (client: FishAudioClient, headers: Headers) => Promise<unknown>> = {
+    "GET JSON": (client, headers) => client.user.get_api_credit({ headers }),
+    "GET with query": (client, headers) => client.voices.search(undefined, { headers }),
+    "POST JSON, streamed response": async (client, headers) => {
+        await new Response(await client.textToSpeech.convert({ text: "hi" }, "s2-pro", { headers })).arrayBuffer();
+    },
+    "multipart upload": (client, headers) =>
+        client.speechToText.convert({ audio: new File([Uint8Array.of(1)], "a.wav") }, { headers }).catch(() => {}),
+};
+
+describe("HTTP: client and per-call header names are merged without regard to case", () => {
+    it.each(Object.entries(HTTP_CALLS))("%s", async (_, call) => {
+        const api = await fakeApi();
+        const cases: Array<[client: Headers, perCall: Headers, expected: string[]]> = [
+            // Different casing: the later source replaces or removes the earlier one.
+            [{ TraceParent: TRACE_A }, { traceparent: TRACE_B }, [TRACE_B]],
+            [{ TraceParent: TRACE_A }, { traceparent: null }, []],
+            [{ traceparent: TRACE_A }, { TRACEPARENT: undefined }, []],
+            // Same casing: unchanged.
+            [{ traceparent: TRACE_A }, { traceparent: TRACE_B }, [TRACE_B]],
+            [{ traceparent: TRACE_A }, { traceparent: null }, []],
+            [{ traceparent: TRACE_A }, {}, [TRACE_A]],
+            [{}, { traceparent: TRACE_B }, [TRACE_B]],
+        ];
+        for (const [clientHeaders, perCall] of cases) {
+            const client = new FishAudioClient({ apiKey: "test-key", baseUrl: api.url, headers: clientHeaders });
+            await call(client, perCall);
+        }
+        expect(api.requests.length).toBe(cases.length);
+        cases.forEach(([, , expected], i) => {
+            expect(headerValues(api.requests[i]!, "traceparent"), `case ${i}`).toEqual(expected);
+            expect(headerValues(api.requests[i]!, "authorization"), `case ${i}`).toEqual(["Bearer test-key"]);
+        });
+    });
+
+    it("a client header spelled differently from the SDK's Authorization does not add a second one", async () => {
+        const api = await fakeApi();
+        const client = new FishAudioClient({ apiKey: "test-key", baseUrl: api.url, headers: { authorization: "Bearer other" } });
+        await client.user.get_api_credit();
+        await client.user.get_api_credit({ apiKey: "call-key" });
+        expect(headerValues(api.requests[0]!, "authorization")).toEqual(["Bearer test-key"]);
+        expect(headerValues(api.requests[1]!, "authorization")).toEqual(["Bearer call-key"]);
+    });
+});
+
+describe("WebSockets: a client header that a per-call header replaces or removes is never resolved", () => {
+    const throwing = () => {
+        supplierCalls += 1;
+        throw new Error("client supplier must not run");
+    };
+    let supplierCalls = 0;
+
+    it.each([
+        ["removed", { traceparent: null }, []],
+        ["replaced in another casing", { TraceParent: TRACE_B }, [TRACE_B]],
+    ] as const)("%s: TTS and STT connect, the supplier is not called", async (_, perCall, expected) => {
+        supplierCalls = 0;
+        const api = await fakeApi();
+        const server = await realtimeServer();
+        const options = { apiKey: "test-key", headers: { traceparent: throwing } as Headers, headerProvider: () => ({ traceparent: TRACE_A }) };
+        const call = { headers: perCall as Headers };
+        await ttsHandshake(new FishAudioClient({ ...options, baseUrl: api.url }), "s2-pro", call);
+        await drain(new FishAudioClient({ ...options, baseUrl: server.url }).speechToText.convertRealtime({}, [], call));
+        expect(supplierCalls).toBe(0);
+        expect(headerValues(api.requests[0]!, "traceparent")).toEqual(expected);
+        expect(server.connections[0]!.headerValues("traceparent")).toEqual(expected);
+    });
+
+    it.each([
+        ["removed", { "x-meta": null }, []],
+        ["replaced in another casing", { "X-Meta": "ok" }, ["ok"]],
+    ] as const)("TTS: an invalid client value that is %s does not throw", async (_, perCall, expected) => {
+        const api = await fakeApi();
+        const client = new FishAudioClient({ apiKey: "test-key", baseUrl: api.url, headers: { "x-meta": "café" } });
+        await ttsHandshake(client, "s2-pro", { headers: perCall });
+        expect(headerValues(api.requests[0]!, "x-meta")).toEqual(expected);
+    });
+
+    it("TTS: an invalid client value that is sent still throws", async () => {
+        const api = await fakeApi();
+        const client = new FishAudioClient({ apiKey: "test-key", baseUrl: api.url, headers: { "x-meta": "café" } });
+        await expect(client.textToSpeech.convertRealtime({ text: "" }, [])).rejects.toThrow(
+            `the client's headers have a value with a non-ASCII character for header "x-meta"`,
+        );
+        expect(api.requests).toEqual([]);
+    });
+});

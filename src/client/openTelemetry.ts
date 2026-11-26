@@ -19,8 +19,8 @@ export interface OpenTelemetryApi {
     };
 }
 
-const TRACE_ID = /^[0-9a-f]{32}$/;
-const SPAN_ID = /^[0-9a-f]{16}$/;
+// The only form Fish Audio continues: version 00, lowercase hex.
+const TRACEPARENT = /^00-([0-9a-f]{32})-([0-9a-f]{16})-[0-9a-f]{2}$/;
 
 /**
  * A header provider that sends the active OpenTelemetry span as a W3C
@@ -31,8 +31,10 @@ const SPAN_ID = /^[0-9a-f]{16}$/;
  * const client = new FishAudioClient({ headerProvider: openTelemetryHeaders(otel) });
  * ```
  *
- * It sends `traceparent` only, built from the active span's IDs and flags, and
- * only for a valid span: no `baggage` (it can carry application data), no
+ * It sends `traceparent` only, built from the active span's IDs (lower-cased,
+ * as W3C requires; uppercase IDs name the same trace) and flags, and only when
+ * the result is a value Fish Audio continues: version `00` with 32 and 16 hex
+ * digits, neither all zeros. Otherwise it sends nothing. No `baggage` (it can carry application data), no
  * `tracestate`, and not the configured propagator, because Fish Audio reads the
  * W3C `traceparent` only. (HTTP instrumentation, where enabled, sends what its
  * own propagators are configured for, by default also `tracestate` and
@@ -57,17 +59,23 @@ export function openTelemetryHeaders(api: OpenTelemetryApi): HeaderProvider {
             if (context == null) {
                 return undefined;
             }
-            const valid = api.trace.isSpanContextValid
-                ? api.trace.isSpanContextValid(context)
-                : TRACE_ID.test(context.traceId) &&
-                  SPAN_ID.test(context.spanId) &&
-                  !/^0+$/.test(context.traceId) &&
-                  !/^0+$/.test(context.spanId);
-            if (!valid) {
+            if (api.trace.isSpanContextValid && !api.trace.isSpanContextValid(context)) {
                 return undefined;
             }
+            // W3C ids are lowercase hex. @opentelemetry/api also accepts
+            // uppercase ids (from a custom or wrapped span context); they name
+            // the same trace, so they are lower-cased rather than dropped.
+            const traceId = String(context.traceId).toLowerCase();
+            const spanId = String(context.spanId).toLowerCase();
             const flags = (context.traceFlags & 0xff).toString(16).padStart(2, "0");
-            return { traceparent: `00-${context.traceId}-${context.spanId}-${flags}` };
+            const traceparent = `00-${traceId}-${spanId}-${flags}`;
+            // Checked here whatever isSpanContextValid said: only a value that
+            // Fish Audio continues is ever sent.
+            const match = TRACEPARENT.exec(traceparent);
+            if (match == null || /^0+$/.test(match[1]!) || /^0+$/.test(match[2]!)) {
+                return undefined;
+            }
+            return { traceparent };
         } catch {
             return undefined;
         }

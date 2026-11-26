@@ -415,7 +415,8 @@ const fishAudio = new FishAudioClient({
 **No tracing.** Nothing to do.
 
 For one call, pass `headers` in the request options, on HTTP and WebSocket calls
-alike. They win over the provider, and `null` sends no such header for that call:
+alike. They win over the client's `headers` and the provider, whatever the casing of
+the name, and `null` sends no such header for that call:
 
 ```typescript
 await fishAudio.textToSpeech.convert({ text: "Hello" }, "s2.1-pro", { headers: { traceparent } });
@@ -430,7 +431,8 @@ Rules:
   whatever their value.
 - A name in the client's `headers` or in per-call `headers`, in any casing, wins over
   it, also when its value is `null` or `undefined`, or a function that returns one:
-  then no such header is sent at all.
+  then no such header is sent at all. A client header that per-call `headers` replace
+  or remove is not used at all: a function given for it is not called.
 - An error it throws rejects the call with that error, unchanged, before anything is
   sent. Returning a promise (an `async` function), a non-object, or a non-string value
   throws `TypeError`; a promise that rejects is handled by the SDK, so its rejection
