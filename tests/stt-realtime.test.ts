@@ -732,6 +732,10 @@ describe("realtime STT errors", () => {
         expect(error).not.toBeInstanceOf(RealtimeSTTError);
         expect(error.statusCode).toBe(status);
         expect(error.body).toEqual({ status, message: "refused" });
+        expect(error.rawResponse.status).toBe(status);
+        expect(error.rawResponse.headers.get("x-fish-trace-id")).toBe("trace-123");
+        expect(error.rawResponse.headers.get("X-Fish-Error-Code")).toBe("invalid_api_key");
+        expect(error.rawResponse.headers.getSetCookie()).toEqual(["a=1", "b=2"]);
         expect(audioRead).toBe(false);
     });
 });
