@@ -12,6 +12,8 @@ This project follows [Semantic Versioning](https://semver.org/). Before 1.0, a m
 ### Fixes
 
 - **A process that used `textToSpeech.convertRealtime()` exits when the stream is over.** The connection now closes its WebSocket when the server finishes the stream or ends it with an error. Before, the socket stayed open until `connection.close()` was called, which the README example did not do, so a Node.js script never exited. If the server does not answer the close within 3 seconds, the socket is destroyed.
+- **A request the server rejects is reported by `textToSpeech.convertRealtime()`.** For a request it rejects, such as a `reference_id` that does not exist, the API sends an `error` message and then stays silent. The SDK ignored that message: no event was emitted and the process never exited. It now emits `RealtimeEvents.ERROR` with the server's text (`Reference not found`), closes the socket and emits CLOSE.
+- **A connection that ends before the stream has finished is reported as an error.** When the socket closes before the server's `finish` and the caller did not call `connection.close()`, the SDK emits `RealtimeEvents.ERROR` (`WebSocket closed before the stream finished (code 1005)`) before CLOSE. Before, it emitted CLOSE alone, so a request the API could not read, such as an unknown `format`, looked like a finished stream with no audio.
 - **`RealtimeEvents.CLOSE` is emitted exactly once per connection**, when the socket has closed. Before, a caller that called `connection.close()` after a finished stream received it twice, and a stream that the server ended with an error never emitted it.
 
 ## [0.2.0] - 2026-11-25

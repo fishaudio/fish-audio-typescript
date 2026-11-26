@@ -220,17 +220,67 @@ describe("realtime TTS connection lifetime", () => {
         expect(openSockets()).toBe(socketsBefore);
     });
 
-    it("emits CLOSE once when the server drops the connection", async () => {
+    it("reports a rejected start event, then closes the socket and emits CLOSE once", async () => {
+        // What the API does with a voice that does not exist: an error event, then silence.
         const server = await serve(async (connection) => {
             await connection.next(); // start
-            connection.socket.terminate();
+            send(connection, { event: "error", error: "Reference not found" });
+        });
+        const socketsBefore = openSockets();
+
+        const seen = watch(await connect(server));
+        await seen.closed;
+
+        expect(await (await server.connection()).closed).toBe(1005);
+        await settle();
+        expect(seen.events).toEqual(["open", "error", "close"]);
+        expect(seen.errors.map((error) => error.message)).toEqual(["Reference not found"]);
+        expect(openSockets()).toBe(socketsBefore);
+    });
+
+    it.each([
+        // What the API does with a start event it cannot read: it closes without a message.
+        ["closes without a message", (connection: FakeConnection) => connection.socket.close(), 1005],
+        ["closes with a status code", (connection: FakeConnection) => connection.socket.close(1011), 1011],
+        ["drops the connection", (connection: FakeConnection) => connection.socket.terminate(), 1006],
+    ])("reports an error, then CLOSE once, when the server %s before finish", async (_name, end, code) => {
+        const server = await serve(async (connection) => {
+            await connection.next(); // start
+            send(connection, { event: "audio", audio: Uint8Array.of(1) });
+            end(connection);
         });
 
         const seen = watch(await connect(server));
         await seen.closed;
 
         await settle();
-        expect(seen.events).toEqual(["open", "close"]);
+        expect(seen.events).toEqual(["open", "error", "close"]);
+        expect(seen.errors.map((error) => error.message)).toEqual([
+            `WebSocket closed before the stream finished (code ${code})`,
+        ]);
+    });
+
+    it("throws an ERROR that has no listener, and still closes the socket", async () => {
+        const server = await serve(async (connection) => {
+            await connection.next(); // start
+            send(connection, { event: "finish", reason: "error", message: "Model overloaded" });
+        });
+        const uncaught: unknown[] = [];
+        const onUncaught = (error: unknown) => uncaught.push(error);
+        // Vitest reports an uncaught exception as a failure; take its place for this test.
+        const listeners = process.listeners("uncaughtException");
+        process.removeAllListeners("uncaughtException");
+        process.on("uncaughtException", onUncaught);
+        try {
+            const connection = await connect(server);
+            await new Promise<void>((resolve) => connection.on(RealtimeEvents.CLOSE, () => resolve()));
+
+            expect(await (await server.connection()).closed).toBe(1005);
+            expect(uncaught.map((error) => (error as Error).message)).toEqual(["Model overloaded"]);
+        } finally {
+            process.off("uncaughtException", onUncaught);
+            for (const listener of listeners) process.on("uncaughtException", listener);
+        }
     });
 
     it("emits ERROR, then CLOSE once, when the connection is refused", async () => {

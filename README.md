@@ -155,6 +155,8 @@ connection.on(RealtimeEvents.CLOSE, async () => {
 
 `CLOSE` is emitted once, when the connection has closed. The connection closes itself after the server has finished the stream or reported an error, so you do not need to call `connection.close()`; call it only to stop a stream early.
 
+A stream that fails emits `ERROR` first, then `CLOSE`: for example when the voice in `reference_id` does not exist, or the connection is lost before the stream has finished. Always attach an `ERROR` listener. Like any Node.js `"error"` event, an `ERROR` with no listener is thrown and ends the process.
+
 ### Speech to Text (ASR)
 
 ```typescript
