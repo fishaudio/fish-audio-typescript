@@ -3,6 +3,7 @@ import WebSocket from "ws";
 import { RealtimeConnection, StartEvent, TextEvent, CloseEvent } from "./connection.js";
 import * as core from "../../core/index.js";
 import * as environments from "../../environments.js";
+import { withUserAgent } from "../../core/userAgent.js";
 import { TTSRequest } from "../../api/resources/textToSpeech/requests/TTSRequest.js";
 import { Backends } from "../../api/resources/textToSpeech/Client.js";
 
@@ -76,13 +77,25 @@ export class TextToSpeechWebSocket extends TextToSpeech {
 
         const uri = await this.getWebSocketUri();
 
+        // Only the client's User-Agent goes along: it is appended to the SDK's own.
+        const userAgents: Record<string, string> = {};
+        for (const [name, supplier] of Object.entries(this._options.headers ?? {})) {
+            if (name.toLowerCase() !== "user-agent") {
+                continue;
+            }
+            const value = await core.Supplier.get(supplier);
+            if (value != null) {
+                userAgents[name] = value;
+            }
+        }
+        const headers = withUserAgent({
+            ...userAgents,
+            Authorization: `Bearer ${apiKey as string}`,
+            model: backend,
+        });
+
         return new Promise((resolve) => {
-            const websocket = new WebSocket(uri, {
-                headers: {
-                    Authorization: `Bearer ${apiKey as string}`,
-                    model: backend,
-                },
-            });
+            const websocket = new WebSocket(uri, { headers });
 
             // Attach websocket to connection immediately so error handlers are registered
             // This ensures errors during handshake (like 403) are properly emitted via event emitter
