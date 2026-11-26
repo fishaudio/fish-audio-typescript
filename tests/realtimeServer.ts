@@ -124,7 +124,7 @@ export async function startRealtimeServer(
     const handlerErrors: unknown[] = [];
 
     http.on("upgrade", (request, socket, head) => {
-        if (!(request.url ?? "").split("?")[0]!.endsWith("/v1/asr/realtime")) {
+        if (!/\/v1\/(asr\/realtime|tts\/live)$/.test((request.url ?? "").split("?")[0]!)) {
             socket.end("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n");
             return;
         }

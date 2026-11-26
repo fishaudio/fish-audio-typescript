@@ -5,6 +5,7 @@ import * as core from "../../core/index.js";
 import * as environments from "../../environments.js";
 import { TTSRequest } from "../../api/resources/textToSpeech/requests/TTSRequest.js";
 import { Backends } from "../../api/resources/textToSpeech/Client.js";
+import { handshakeHeaders } from "./handshakeHeaders.js";
 
 /**
  * Text-to-Speech WebSocket client.
@@ -36,6 +37,8 @@ export class TextToSpeechWebSocket extends TextToSpeech {
      * Establishes a WebSocket connection for real-time text-to-speech.
      *
      * @param options - Configuration options for the connection
+     * @param requestOptions - `headers`: additional headers to include in the handshake.
+     * `Authorization` and `model` are always the SDK's own.
      * @returns A promise that resolves to a RealtimeConnection instance
      *
      * @remarks
@@ -54,6 +57,7 @@ export class TextToSpeechWebSocket extends TextToSpeech {
         request: TTSRequest,
         textStream: Iterable<string> | AsyncIterable<string>,
         backend: Backends = "s2.1-pro",
+        requestOptions: Pick<TextToSpeech.RequestOptions, "headers"> = {},
     ): Promise<RealtimeConnection> {
         let apiKey = this._options.apiKey;
         if (!apiKey) {
@@ -75,14 +79,13 @@ export class TextToSpeechWebSocket extends TextToSpeech {
         const connection = new RealtimeConnection();
 
         const uri = await this.getWebSocketUri();
+        const headers = await handshakeHeaders(this._options.headers, requestOptions.headers, {
+            Authorization: `Bearer ${apiKey as string}`,
+            model: backend,
+        });
 
         return new Promise((resolve) => {
-            const websocket = new WebSocket(uri, {
-                headers: {
-                    Authorization: `Bearer ${apiKey as string}`,
-                    model: backend,
-                },
-            });
+            const websocket = new WebSocket(uri, { headers });
 
             // Attach websocket to connection immediately so error handlers are registered
             // This ensures errors during handshake (like 403) are properly emitted via event emitter

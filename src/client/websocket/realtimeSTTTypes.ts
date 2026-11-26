@@ -4,6 +4,8 @@
  * Field names match the wire protocol, so events and messages use snake_case.
  */
 
+import type { Supplier } from "../../core/index.js";
+
 /** Sample rates the realtime endpoint accepts, in Hz. Audio is always 16-bit little-endian mono PCM. */
 export type RealtimeSTTSampleRate = 8000 | 12000 | 16000 | 22050 | 24000 | 32000 | 44100 | 48000;
 
@@ -92,6 +94,8 @@ export interface RealtimeSTTRequestOptions {
     abortSignal?: AbortSignal;
     /** The maximum time to wait for the connection to open, in seconds. Defaults to 30. */
     timeoutInSeconds?: number;
+    /** Additional headers to include in the handshake. `Authorization` and `model` are always the SDK's own. */
+    headers?: Record<string, string | Supplier<string | null | undefined> | null | undefined>;
 }
 
 /** Settings `configure()` can change during a session. A field you leave out keeps its value. */
