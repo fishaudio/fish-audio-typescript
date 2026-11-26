@@ -349,6 +349,19 @@ fishAudio.user.get_api_credit()
 fishAudio.user.get_package()
 ```
 
+### Trace IDs
+
+Responses to speech and transcription requests carry an `x-fish-trace-id` header. Include it when you contact support about a request, also one that succeeded but sounds wrong. Read it from the raw response of a call:
+
+```typescript
+const { data: audio, rawResponse } = await fishAudio.textToSpeech
+    .convert({ text: "Hello!" })
+    .withRawResponse();
+const traceId = rawResponse.headers.get("x-fish-trace-id"); // null if not sent
+```
+
+`speechToText.convert()` works the same way, and its result also has `request_id`. A realtime transcription stream has the handshake response as `stream.rawResponse` once the first event has arrived; it stays there after the session has ended or failed. `textToSpeech.convertRealtime()` does not expose it yet.
+
 ## License
 
 This project is licensed under the Apache-2.0 License - see the [LICENSE](LICENSE) file for details.

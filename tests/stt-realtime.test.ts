@@ -32,7 +32,7 @@ afterEach(async () => {
 
 async function serve(
     handler: (connection: FakeConnection) => void | Promise<void>,
-    options?: { refuse?: { status: number; body?: string } },
+    options?: { refuse?: { status: number; body?: string }; invalidUpgrade?: boolean },
 ): Promise<FakeServer> {
     const server = await startRealtimeServer(handler, options);
     servers.push(server);
@@ -519,6 +519,85 @@ describe("realtime STT session", () => {
         const events = await collect(transcribe(server, [pcm(1)]));
 
         expect(events.map((event) => event.type)).toEqual(["session_started", "committed", "session_done"]);
+    });
+});
+
+describe("realtime STT handshake response", () => {
+    const started: Message = { type: "session_started", session_id: "s_1", request_id: "req_1", config: {}, limits: {} };
+
+    it("is on the stream from the first event on, and after the session has ended", async () => {
+        const server = await serve(async (connection) => {
+            await connection.next();
+            connection.send(started);
+            await connection.until("audio_done");
+            connection.done();
+        });
+        const stream = transcribe(server, [pcm(1)]);
+        expect(stream.rawResponse).toBeUndefined();
+
+        const first = await stream.next();
+
+        expect(first.value.type).toBe("session_started");
+        expect(stream.rawResponse).toMatchObject({ status: 101, statusText: "Switching Protocols", redirected: false });
+        expect(stream.rawResponse!.url).toBe(`${server.url.replace("http", "ws")}/v1/asr/realtime`);
+        expect(stream.rawResponse!.headers.get("x-fish-trace-id")).toBe("trace-123");
+        expect(stream.rawResponse!.headers.get("X-Fish-Trace-Id")).toBe("trace-123");
+        expect(stream.rawResponse!.headers.getSetCookie()).toEqual(["a=1", "b=2"]);
+        expect(stream.rawResponse!.headers.get("x-not-sent")).toBeNull();
+
+        await collect(stream);
+        expect(stream.rawResponse!.headers.get("x-fish-trace-id")).toBe("trace-123");
+    });
+
+    it("stays on a session that fails after it opened", async () => {
+        const server = await serve(async (connection) => {
+            await connection.next();
+            connection.send(errorMessage("unsupported_audio", 400, false));
+            connection.socket.close(4400);
+        });
+        const stream = transcribe(server, [pcm(1)]);
+
+        const { error } = await failure(stream);
+
+        expect(error).toBeInstanceOf(RealtimeSTTError);
+        expect(stream.rawResponse!.headers.get("x-fish-trace-id")).toBe("trace-123");
+    });
+
+    it("is the response as received, also when the handshake then fails validation", async () => {
+        const server = await serve(() => {}, { invalidUpgrade: true });
+        const stream = transcribe(server, [pcm(1)]);
+
+        const { events, error } = await within(2000, failure(stream));
+
+        expect(events).toEqual([]);
+        expect(error).toBeInstanceOf(RealtimeSTTError);
+        expect(stream.rawResponse!.status).toBe(101);
+        expect(stream.rawResponse!.headers.get("x-fish-trace-id")).toBe("trace-123");
+    });
+
+    it("stays undefined when the handshake is refused", async () => {
+        const server = await serve(() => {}, { refuse: { status: 401, body: "{}" } });
+        const stream = transcribe(server, [pcm(1)]);
+
+        await failure(stream);
+
+        expect(stream.rawResponse).toBeUndefined();
+    });
+
+    it("each of two open sessions has its own", async () => {
+        const server = await serve(async (connection) => {
+            await connection.next();
+            connection.send(started);
+        });
+        const first = transcribe(server, silentMicrophone());
+        const second = transcribe(server, silentMicrophone());
+
+        await Promise.all([first.next(), second.next()]);
+
+        expect(first.rawResponse).not.toBe(second.rawResponse);
+        expect(first.rawResponse!.headers.get("x-fish-trace-id")).toBe("trace-123");
+        expect(second.rawResponse!.headers.get("x-fish-trace-id")).toBe("trace-123");
+        await Promise.all([first.close(), second.close()]);
     });
 });
 

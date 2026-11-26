@@ -115,10 +115,12 @@ export interface FakeServer {
  */
 export async function startRealtimeServer(
     handler: (connection: FakeConnection) => void | Promise<void>,
-    options: { refuse?: { status: number; body?: string } } = {},
+    options: { refuse?: { status: number; body?: string }; invalidUpgrade?: boolean } = {},
 ): Promise<FakeServer> {
     const http: Server = createServer();
     const wss = new WebSocketServer({ noServer: true });
+    // Sent with every accepted handshake, as the API does.
+    wss.on("headers", (headers) => headers.push("X-Fish-Trace-Id: trace-123", "Set-Cookie: a=1", "Set-Cookie: b=2"));
     const connections: FakeConnection[] = [];
     const arrivals: Array<() => void> = [];
     const handlerErrors: unknown[] = [];
@@ -136,6 +138,17 @@ export async function startRealtimeServer(
                     `Content-Length: ${Buffer.byteLength(body)}\r\n` +
                     "Connection: close\r\n\r\n" +
                     body,
+            );
+            return;
+        }
+        if (options.invalidUpgrade) {
+            // A 101 whose Sec-WebSocket-Accept does not match the client's key.
+            socket.end(
+                "HTTP/1.1 101 Switching Protocols\r\n" +
+                    "Upgrade: websocket\r\n" +
+                    "Connection: Upgrade\r\n" +
+                    "Sec-WebSocket-Accept: invalid\r\n" +
+                    "X-Fish-Trace-Id: trace-123\r\n\r\n",
             );
             return;
         }

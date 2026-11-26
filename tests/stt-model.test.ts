@@ -20,7 +20,8 @@ async function fakeAsr(): Promise<{ client: FishAudioClient; requests: IncomingM
         request.resume();
         request.on("end", () => {
             response.setHeader("Content-Type", "application/json");
-            response.end(JSON.stringify({ text: "hello", duration: 1, segments: [] }));
+            response.setHeader("x-fish-trace-id", "trace-123");
+            response.end(JSON.stringify({ text: "hello", duration: 1, segments: [], request_id: "req-123" }));
         });
     });
     await new Promise<void>((resolve) => server!.listen(0, "127.0.0.1", resolve));
@@ -40,6 +41,20 @@ function headerValues(request: IncomingMessage, name: string): string[] {
 }
 
 const audio = () => new File([Uint8Array.of(1, 2, 3)], "audio.wav");
+
+describe("speechToText.convert response", () => {
+    it("returns the request ID, and the response headers through withRawResponse()", async () => {
+        const { client } = await fakeAsr();
+
+        const { data, rawResponse } = await client.speechToText
+            .convert({ audio: audio() })
+            .withRawResponse();
+
+        const requestId: string | undefined = data.request_id;
+        expect(requestId).toBe("req-123");
+        expect(rawResponse.headers.get("x-fish-trace-id")).toBe("trace-123");
+    });
+});
 
 describe("speechToText.convert model", () => {
     it("sends no model header by default", async () => {

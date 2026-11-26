@@ -3,6 +3,8 @@ import { decode, encode } from "@msgpack/msgpack";
 import type { ClientRequest, IncomingMessage } from "node:http";
 import { types } from "node:util";
 import * as apiErrors from "../../api/errors/index.js";
+import { Headers } from "../../core/fetcher/Headers.js";
+import type { RawResponse } from "../../core/fetcher/RawResponse.js";
 import { FishAudioError } from "../../errors/FishAudioError.js";
 import { RealtimeSTTError } from "../../errors/RealtimeSTTError.js";
 import type {
@@ -165,6 +167,7 @@ export class RealtimeSTTStream implements AsyncIterableIterator<RealtimeSTTEvent
     #hasError = false;
 
     #websocket: WebSocket | undefined;
+    #rawResponse: RawResponse | undefined;
     #paused = false;
     #closeTimer: ReturnType<typeof setTimeout> | undefined;
     #openTimer: ReturnType<typeof setTimeout> | undefined;
@@ -212,6 +215,21 @@ export class RealtimeSTTStream implements AsyncIterableIterator<RealtimeSTTEvent
         this.#abortSignal?.addEventListener("abort", this.#onAbort, { once: true });
         void this.#open(params.connect, config);
         void this.#sendAudio(params.audio);
+    }
+
+    /**
+     * The server's response to the WebSocket handshake: its status and headers,
+     * for example `rawResponse.headers.get("x-fish-trace-id")`. Include that ID
+     * when you contact support about a session.
+     *
+     * `undefined` until the server answers the handshake with an upgrade
+     * response, which is before the first event is yielded, and it stays
+     * `undefined` when the server refuses the handshake with an HTTP error. It
+     * stays set after the session has ended or failed. It is the response as
+     * received, so it does not by itself mean that the session opened.
+     */
+    public get rawResponse(): RawResponse | undefined {
+        return this.#rawResponse;
     }
 
     // ----- reading ---------------------------------------------------------
@@ -396,6 +414,12 @@ export class RealtimeSTTStream implements AsyncIterableIterator<RealtimeSTTEvent
                 if (event !== undefined) {
                     this.#receive(event);
                 }
+            }),
+        );
+        websocket.on(
+            "upgrade",
+            this.#guarded((response: IncomingMessage) => {
+                this.#rawResponse = upgradeResponse(params.url, response);
             }),
         );
         websocket.on(
@@ -762,6 +786,24 @@ function handshakeError(statusCode: number, body: unknown): FishAudioError {
                 body,
             });
     }
+}
+
+/** The handshake response in the shape HTTP calls report theirs. */
+function upgradeResponse(url: string, response: IncomingMessage): RawResponse {
+    const headers = new Headers();
+    for (const [name, value] of Object.entries(response.headers)) {
+        for (const item of Array.isArray(value) ? value : [value ?? ""]) {
+            headers.append(name, item);
+        }
+    }
+    return {
+        headers,
+        redirected: false,
+        status: response.statusCode ?? 0,
+        statusText: response.statusMessage ?? "",
+        type: "basic",
+        url,
+    };
 }
 
 function readRefusalBody(response: IncomingMessage): Promise<unknown> {
