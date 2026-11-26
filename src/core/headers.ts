@@ -6,14 +6,26 @@ export function mergeHeaders<THeaderValue>(
     for (const [key, value] of headersArray
         .filter((headers) => headers != null)
         .flatMap((headers) => Object.entries(headers))) {
+        // Header names are case-insensitive: a later "authorization" replaces
+        // (or, with null, removes) an earlier "Authorization". Left under both
+        // spellings, fetch would join the two values into one header.
+        removeHeader(result, key);
         if (value != null) {
             result[key] = value;
-        } else if (key in result) {
-            delete result[key];
         }
     }
 
     return result;
+}
+
+/** Deletes the header `name` from `headers` under every spelling of the name. */
+export function removeHeader(headers: Record<string, unknown>, name: string): void {
+    const lowered = name.toLowerCase();
+    for (const existing of Object.keys(headers)) {
+        if (existing.toLowerCase() === lowered) {
+            delete headers[existing];
+        }
+    }
 }
 
 export function mergeOnlyDefinedHeaders<THeaderValue>(
