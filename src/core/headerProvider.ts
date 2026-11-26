@@ -7,11 +7,15 @@
  * in the async context of the call, so `AsyncLocalStorage` and OpenTelemetry's
  * `context.active()` see the caller's values). It must be synchronous. Return
  * the headers to add, or `undefined`/`null` to add none; a header whose value
- * is `undefined` or `null` is skipped.
+ * is `undefined` or `null` is skipped. A value must be empty, or visible ASCII
+ * characters with spaces or tabs only between them (an RFC 9110 field value,
+ * ASCII only); any other value throws `TypeError` before anything is sent, and
+ * the error does not contain the value.
  *
  * Headers the SDK sets (`Authorization`, `model`, `User-Agent`, `Content-Type`,
- * `Content-Length`, `Host`, WebSocket handshake headers) cannot be set by it,
- * and the client's `headers` and per-call `requestOptions.headers` win over it.
+ * `Content-Length`, `Host`, WebSocket handshake headers) cannot be set by it
+ * and are skipped whatever their value, and the client's `headers` and
+ * per-call `requestOptions.headers` win over it.
  * An error it throws fails the call, unchanged, before anything is sent.
  *
  * Do not return `traceparent` while `@opentelemetry/instrumentation-undici`
@@ -37,8 +41,47 @@ const RESERVED = new Set([
 ]);
 
 const HEADER_NAME = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
-// Control characters other than horizontal tab may not appear in a value.
-const FORBIDDEN_IN_VALUE = /[\x00-\x08\x0a-\x1f\x7f]/;
+
+/**
+ * Why `value` may not be sent as a header value, or `undefined` if it may.
+ *
+ * The rule is RFC 9110 §5.5 limited to ASCII: empty, or visible ASCII
+ * characters (0x21-0x7E) with spaces and tabs only between them. Every value
+ * it accepts reaches the server byte-for-byte through `fetch` and through the
+ * `ws` handshake alike. It is stricter than Node on purpose: Node sends
+ * Latin-1 characters (one byte each) and leading or trailing whitespace, but
+ * `fetch` strips that whitespace and so does the server's parser, and bytes
+ * above 0x7F are obsolete in a field value (RFC 9110 `obs-text`) and may be
+ * rejected or rewritten by a server or proxy. The answer names the kind of
+ * problem only, never the value, which may be a credential.
+ */
+export function headerValueProblem(value: string): string | undefined {
+    if (/[\x00-\x08\x0a-\x1f\x7f]/.test(value)) {
+        return "a control character";
+    }
+    if (/[^\x00-\x7f]/.test(value)) {
+        return "a non-ASCII character";
+    }
+    if (/^[ \t]|[ \t]$/.test(value)) {
+        return "leading or trailing whitespace";
+    }
+    return undefined;
+}
+
+/**
+ * Throws `TypeError` unless `name` is a header name and `value` a value the SDK
+ * sends (see {@link headerValueProblem}). `source` starts the message, e.g.
+ * "headerProvider returned". The message names the header, never the value.
+ */
+export function checkHeader(source: string, name: string, value: string): void {
+    if (!HEADER_NAME.test(name)) {
+        throw new TypeError(`${source} an invalid header name ${JSON.stringify(name)}`);
+    }
+    const problem = headerValueProblem(value);
+    if (problem !== undefined) {
+        throw new TypeError(`${source} a value with ${problem} for header ${JSON.stringify(name)}`);
+    }
+}
 
 function isReserved(name: string): boolean {
     const lowered = name.toLowerCase();
@@ -101,22 +144,16 @@ function collect(result: unknown, taken: Iterable<string>): Record<string, strin
     }
     const headers: Record<string, string> = {};
     for (const [name, value] of Object.entries(result)) {
-        if (value == null) {
+        // A header it may not set is skipped before anything about it is
+        // checked, so a provider that copies an inbound request's headers
+        // cannot fail on one of those.
+        if (value == null || isReserved(name) || takenNames.has(name.toLowerCase())) {
             continue;
         }
         if (typeof value !== "string") {
             throw new TypeError(`headerProvider must return string header values, got ${typeof value} for ${JSON.stringify(name)}`);
         }
-        if (!HEADER_NAME.test(name)) {
-            throw new TypeError(`headerProvider returned an invalid header name ${JSON.stringify(name)}`);
-        }
-        if (FORBIDDEN_IN_VALUE.test(value)) {
-            // The value is not echoed: it may be a credential.
-            throw new TypeError(`headerProvider returned an invalid value for header ${JSON.stringify(name)}`);
-        }
-        if (isReserved(name) || takenNames.has(name.toLowerCase())) {
-            continue;
-        }
+        checkHeader("headerProvider returned", name, value);
         // One spelling per name: a later one replaces an earlier one.
         for (const existing of Object.keys(headers)) {
             if (existing.toLowerCase() === name.toLowerCase()) {

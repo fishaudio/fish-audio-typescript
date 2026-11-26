@@ -24,7 +24,9 @@ export declare namespace FishAudioClient {
          * async context, so `AsyncLocalStorage` and OpenTelemetry's
          * `context.active()` see the caller's values. Headers the SDK sets, the
          * `headers` above and per-call `requestOptions.headers` win over it; an
-         * error it throws fails the call unchanged. Do not return `traceparent`
+         * error it throws fails the call unchanged. A value must be empty, or
+         * visible ASCII with spaces or tabs only between characters; any other
+         * value throws `TypeError` (without the value) before anything is sent. Do not return `traceparent`
          * when `@opentelemetry/instrumentation-undici` is active: it adds its own,
          * and two make the API start a new trace. For OpenTelemetry without HTTP
          * instrumentation, use `openTelemetryHeaders(api)`.

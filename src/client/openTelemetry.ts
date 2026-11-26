@@ -34,14 +34,17 @@ const SPAN_ID = /^[0-9a-f]{16}$/;
  * It sends `traceparent` only, built from the active span's IDs and flags, and
  * only for a valid span: no `baggage` (it can carry application data), no
  * `tracestate`, and not the configured propagator, because Fish Audio reads the
- * W3C `traceparent` only. An error inside OpenTelemetry sends no header and
- * never fails a request.
+ * W3C `traceparent` only. (HTTP instrumentation, where enabled, sends what its
+ * own propagators are configured for, by default also `tracestate` and
+ * `baggage`, with or without this helper.) An error inside OpenTelemetry sends
+ * no header and never fails a request.
  *
  * Do not use it together with `@opentelemetry/instrumentation-undici` (part of
  * `auto-instrumentations-node`): that instrumentation already adds a
  * `traceparent` to every HTTP request, a second one is appended rather than
  * replaced, and Fish Audio treats a request with two as having none and starts
- * a new trace. With undici instrumentation you need no header provider. If you
+ * a new trace. With the undici and http instrumentations (http covers the
+ * WebSocket handshakes) you need no header provider. If you
  * combine them anyway, the SDK sees from the `x-fish-trace-id` response header
  * that the trace was not continued and warns once per process
  * (`FishAudioTraceWarning`, code `FISH_AUDIO_TRACE_NOT_CONTINUED`); remove one

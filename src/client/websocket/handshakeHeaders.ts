@@ -1,5 +1,5 @@
 import * as core from "../../core/index.js";
-import { HeaderProviderFailure, providedHeaders } from "../../core/headerProvider.js";
+import { checkHeader, HeaderProviderFailure, providedHeaders } from "../../core/headerProvider.js";
 import { withUserAgent } from "../../core/userAgent.js";
 
 type HeaderSource = Record<string, string | core.Supplier<string | null | undefined> | null | undefined>;
@@ -22,11 +22,13 @@ function setHeader(headers: Record<string, string>, name: string, value: string 
  *
  * 1. the client's `headers` (suppliers run; `Authorization` and `model` skipped);
  * 2. the SDK's `Authorization` and `model`;
- * 3. the call's `requestOptions.headers` (a `null` value removes a header);
+ * 3. the call's `requestOptions.headers` (a `null` value removes a header; a
+ *    value the header provider could not return throws `TypeError`);
  * 4. the header provider, for names nobody set;
  * 5. `User-Agent`: the SDK's own, with a caller's value appended.
  *
- * An error thrown by the header provider is rethrown unchanged.
+ * An error thrown by the header provider is rethrown unchanged. The client's
+ * `headers` are not checked, as on HTTP requests.
  */
 export async function handshakeHeaders(params: {
     clientHeaders: HeaderSource | undefined;
@@ -47,7 +49,13 @@ export async function handshakeHeaders(params: {
         setHeader(headers, name, value);
     }
     for (const [name, supplier] of Object.entries(params.requestHeaders ?? {})) {
-        setHeader(headers, name, await core.Supplier.get(supplier));
+        const value = await core.Supplier.get(supplier);
+        if (value != null) {
+            // The rule the header provider follows, so a bad value fails here
+            // with a TypeError that does not contain it, never inside ws.
+            checkHeader("requestOptions.headers has", name, String(value));
+        }
+        setHeader(headers, name, value);
     }
     try {
         // Last, right before the socket is opened, so it sees the caller's context then.

@@ -378,8 +378,10 @@ const fishAudio = new FishAudioClient({ headerProvider: openTelemetryHeaders(ote
 ```
 
 With it, the SDK sends the current trace ID to Fish Audio in a `traceparent` header
-so you can find your requests in Fish Audio's traces. It sends no other trace data
-(no `baggage`, no `tracestate`). To turn this off, leave out `headerProvider`.
+so you can find your requests in Fish Audio's traces. The helper adds no other trace
+data (no `baggage`, no `tracestate`). HTTP instrumentation, where you enable it, sends
+what its propagators are configured for, by default also `tracestate` and `baggage`,
+with or without this SDK. To turn the helper off, leave out `headerProvider`.
 
 **Your own trace IDs.** The API accepts only a valid `traceparent` (version `00`:
 32 hex digits of trace ID, 16 of parent ID, 2 of flags). Convert your IDs; an
@@ -419,11 +421,15 @@ fishAudio.speechToText.convertRealtime({}, microphone(), { headers: { traceparen
 
 Rules:
 - The provider cannot set `Authorization`, `model`, `User-Agent`, `Content-Type`,
-  `Content-Length`, `Host` or WebSocket handshake headers; those names are ignored.
-  The client's `headers` and per-call headers win over it.
+  `Content-Length`, `Host` or WebSocket handshake headers; those names are ignored,
+  whatever their value. The client's `headers` and per-call headers win over it.
 - An error it throws rejects the call with that error, unchanged, before anything is
-  sent. Returning a promise, a non-object, or a non-string value throws `TypeError`,
-  as does a value with a line break.
+  sent. Returning a promise, a non-object, or a non-string value throws `TypeError`.
+- A header value must be empty, or visible ASCII characters with spaces or tabs only
+  between them (an RFC 9110 field value, ASCII only). A value with a non-ASCII
+  character, a control character, or leading or trailing whitespace throws `TypeError`
+  before anything is sent; the message names the header, never the value. Per-call
+  `headers` on both WebSockets follow the same rule.
 - It runs on every attempt, synchronously, so keep it fast and free of I/O.
 
 **If the trace is not continued.** Text-to-speech and speech-to-text responses (HTTP,

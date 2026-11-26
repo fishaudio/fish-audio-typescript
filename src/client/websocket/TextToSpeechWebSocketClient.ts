@@ -13,6 +13,8 @@ export interface RealtimeTTSRequestOptions {
     /**
      * Additional headers for the WebSocket handshake. They are merged as on HTTP
      * requests: they win over the client's `headers` and its `headerProvider`.
+     * A value must be empty, or visible ASCII with spaces or tabs only between
+     * characters; any other value throws `TypeError` before connecting.
      */
     headers?: Record<string, string | core.Supplier<string | null | undefined> | null | undefined>;
 }
