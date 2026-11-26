@@ -153,6 +153,8 @@ connection.on(RealtimeEvents.CLOSE, async () => {
 });
 ```
 
+`CLOSE` is emitted once, when the connection has closed. The connection closes itself after the server has finished the stream or reported an error, so you do not need to call `connection.close()`; call it only to stop a stream early.
+
 ### Speech to Text (ASR)
 
 ```typescript

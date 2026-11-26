@@ -109,7 +109,8 @@ export interface FakeServer {
 }
 
 /**
- * Starts a protocol-level fake of the realtime endpoint on a real TCP port.
+ * Starts a protocol-level fake of the realtime endpoints (`/v1/asr/realtime`
+ * and `/v1/tts/live`) on a real TCP port.
  * `handler` plays the server's side of each connection; `refuse` answers the
  * WebSocket handshake with an HTTP error instead.
  */
@@ -124,7 +125,8 @@ export async function startRealtimeServer(
     const handlerErrors: unknown[] = [];
 
     http.on("upgrade", (request, socket, head) => {
-        if (!(request.url ?? "").split("?")[0]!.endsWith("/v1/asr/realtime")) {
+        const path = (request.url ?? "").split("?")[0]!;
+        if (!path.endsWith("/v1/asr/realtime") && !path.endsWith("/v1/tts/live")) {
             socket.end("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n");
             return;
         }

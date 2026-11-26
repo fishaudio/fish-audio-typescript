@@ -9,6 +9,11 @@ This project follows [Semantic Versioning](https://semver.org/). Before 1.0, a m
 
 - **The licence is now Apache-2.0.** `package.json` states `"license": "Apache-2.0"` and the repository and the npm package contain a `LICENSE` file with the Apache License 2.0 text. Versions 0.1.0 and 0.2.0 were published with `"license": "MIT"` in their metadata and without a `LICENSE` file.
 
+### Fixes
+
+- **A process that used `textToSpeech.convertRealtime()` exits when the stream is over.** The connection now closes its WebSocket when the server finishes the stream or ends it with an error. Before, the socket stayed open until `connection.close()` was called, which the README example did not do, so a Node.js script never exited. If the server does not answer the close within 3 seconds, the socket is destroyed.
+- **`RealtimeEvents.CLOSE` is emitted exactly once per connection**, when the socket has closed. Before, a caller that called `connection.close()` after a finished stream received it twice, and a stream that the server ended with an error never emitted it.
+
 ## [0.2.0] - 2026-11-25
 
 ### Features

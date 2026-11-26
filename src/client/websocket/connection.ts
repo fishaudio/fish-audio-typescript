@@ -56,6 +56,13 @@ export class CloseEvent {
 type WebSocketMessage = StartEvent | TextEvent | FlushEvent | CloseEvent;
 
 /**
+ * How long the server gets to answer the close frame once the stream has
+ * ended. After that the socket is destroyed, so CLOSE is never held back by
+ * the 30 seconds `ws` waits for a peer that does not answer.
+ */
+const CLOSE_GRACE_MS = 3000;
+
+/**
  * Events emitted by the RealtimeConnection.
  */
 export enum RealtimeEvents {
@@ -65,7 +72,10 @@ export enum RealtimeEvents {
     ERROR = "error",
     /** Emitted when the WebSocket connection is opened */
     OPEN = "open",
-    /** Emitted when the WebSocket connection is closed */
+    /**
+     * Emitted once, when the WebSocket connection is closed: after the server
+     * has finished the stream, after an error that ends it, or after `close()`.
+     */
     CLOSE = "close",
 }
 
@@ -103,6 +113,7 @@ export enum RealtimeEvents {
 export class RealtimeConnection {
     private websocket: WebSocket | null = null;
     private eventEmitter: EventEmitter = new EventEmitter();
+    private ending = false;
 
     /**
      * @internal
@@ -145,12 +156,15 @@ export class RealtimeConnection {
                 }
 
                 if (eventType === "finish") {
+                    // `finish` is the last message of a stream, but the server
+                    // leaves the socket open afterwards. Close it here: an open
+                    // socket keeps the Node.js process alive. CLOSE follows from
+                    // the socket's own "close" event, so it is emitted once.
+                    this.endStream();
                     const reason = (decoded as { reason?: unknown }).reason;
                     if (reason === "error") {
                         const message = (decoded as { message?: unknown }).message;
                         this.eventEmitter.emit(RealtimeEvents.ERROR, new Error(typeof message === "string" ? message : "WebSocket error"));
-                    } else if (reason === "stop") {
-                        this.eventEmitter.emit(RealtimeEvents.CLOSE);
                     }
                     return;
                 }
@@ -166,6 +180,18 @@ export class RealtimeConnection {
         this.websocket.on("close", () => {
             this.eventEmitter.emit(RealtimeEvents.CLOSE);
         });
+    }
+
+    /** Closes the socket after the server has ended the stream. */
+    private endStream(): void {
+        const websocket = this.websocket;
+        if (!websocket || this.ending) return;
+        this.ending = true;
+
+        websocket.close();
+        const timer = setTimeout(() => websocket.terminate(), CLOSE_GRACE_MS);
+        timer.unref();
+        websocket.once("close", () => clearTimeout(timer));
     }
 
     /**
@@ -238,6 +264,9 @@ export class RealtimeConnection {
      * After calling close(), this connection cannot be reused.
      * Create a new connection if you need to start converting again.
      *
+     * You do not need to call close() after a stream that ran to its end:
+     * the connection closes itself when the server finishes the stream.
+     * Calling it then, or more than once, has no effect.
      */
     public close(): void {
         if (this.websocket) {
