@@ -36,3 +36,28 @@ export function anySignal(...args: AbortSignal[] | [AbortSignal[]]): AbortSignal
 
     return controller.signal;
 }
+
+/**
+ * Like {@link anySignal}: a signal that aborts when one of `signals` does.
+ * `unlink` removes the listeners it put on `signals` without aborting, for a
+ * request that ended on its own; a signal reused across requests would
+ * otherwise keep one listener for every request that failed.
+ */
+export function linkedSignal(signals: AbortSignal[]): { signal: AbortSignal; unlink: () => void } {
+    const controller = new AbortController();
+    const listeners = new AbortController();
+    // Once aborted, the listeners have done their work.
+    controller.signal.addEventListener("abort", () => listeners.abort(), { once: true });
+
+    for (const signal of signals) {
+        if (signal.aborted) {
+            controller.abort((signal as any)?.reason);
+            break;
+        }
+        signal.addEventListener("abort", () => controller.abort((signal as any)?.reason), {
+            signal: listeners.signal,
+        });
+    }
+
+    return { signal: controller.signal, unlink: () => listeners.abort() };
+}
