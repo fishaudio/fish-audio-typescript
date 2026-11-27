@@ -47,7 +47,7 @@
     "devDependencies": {
         "@types/command-exists": "^1.2.3",
         "@types/node": "^24.9.1",
-        "tsup": "^8.5.0",
+        "esbuild": "^0.28.2",
         "typescript": "^5.9.3",
         "vitest": "^4.1.10"
     },
