@@ -1,4 +1,4 @@
-import { anySignal, getTimeoutSignal } from "./signals.js";
+import { getTimeoutSignal, linkedSignal } from "./signals.js";
 
 export const makeRequest = async (
     fetchFn: (url: string, init: RequestInit) => Promise<Response>,
@@ -25,20 +25,28 @@ export const makeRequest = async (
     if (abortSignal != null) {
         signals.push(abortSignal);
     }
-    let newSignals = anySignal(signals);
-    const response = await fetchFn(url, {
-        method: method,
-        headers,
-        body: requestBody,
-        signal: newSignals,
-        credentials: withCredentials ? "include" : undefined,
-        // @ts-ignore
-        duplex,
-    });
-
-    if (timeoutAbortId != null) {
-        clearTimeout(timeoutAbortId);
+    const { signal: newSignals, unlink } = linkedSignal(signals);
+    try {
+        return await fetchFn(url, {
+            method: method,
+            headers,
+            body: requestBody,
+            signal: newSignals,
+            credentials: withCredentials ? "include" : undefined,
+            // @ts-ignore
+            duplex,
+        });
+    } catch (error) {
+        // The request is over, so nothing is left to abort: stop listening to
+        // the caller's signal, which may be reused for many requests. (After
+        // a response the link stays, so the caller can still abort the body.)
+        unlink();
+        throw error;
+    } finally {
+        // Also when fetch rejects (a refused connection, an invalid header):
+        // a timer left running keeps the Node process alive until it fires.
+        if (timeoutAbortId != null) {
+            clearTimeout(timeoutAbortId);
+        }
     }
-
-    return response;
 };
