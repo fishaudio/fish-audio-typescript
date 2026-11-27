@@ -1,5 +1,6 @@
 import { removeHeader } from "../headers.js";
 import { toJson } from "../json.js";
+import { withUserAgent } from "../userAgent.js";
 import { APIResponse } from "./APIResponse.js";
 import { createRequestUrl } from "./createRequestUrl.js";
 import { EndpointMetadata } from "./EndpointMetadata.js";
@@ -63,7 +64,7 @@ async function getHeaders(args: Fetcher.Args): Promise<Record<string, string>> {
     }
 
     if (args.headers == null) {
-        return newHeaders;
+        return withUserAgent(newHeaders);
     }
 
     for (const [key, value] of Object.entries(args.headers)) {
@@ -75,7 +76,8 @@ async function getHeaders(args: Fetcher.Args): Promise<Record<string, string>> {
         removeHeader(newHeaders, key);
         newHeaders[key] = typeof result === "string" ? result : `${result}`;
     }
-    return newHeaders;
+    // Every HTTP request goes through here, also from a resource client built without FishAudioClient.
+    return withUserAgent(newHeaders);
 }
 
 export async function fetcherImpl<R = unknown>(args: Fetcher.Args): Promise<APIResponse<R, Fetcher.Error>> {

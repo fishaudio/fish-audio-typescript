@@ -1,6 +1,7 @@
 import { SpeechToText } from "../../api/resources/speechToText/Client.js";
 import * as core from "../../core/index.js";
 import * as environments from "../../environments.js";
+import { withUserAgent } from "../../core/userAgent.js";
 import { FishAudioError } from "../../errors/FishAudioError.js";
 import { RealtimeSTTStream } from "./RealtimeSTTStream.js";
 import { handshakeHeaders } from "./handshakeHeaders.js";
@@ -72,7 +73,7 @@ export class SpeechToTextWebSocket extends SpeechToText {
                 return {
                     // Joined as HTTP requests are, so a path or query on baseUrl is kept.
                     url: core.url.join(baseUrl.replace(/^http/i, "ws"), "v1/asr/realtime"),
-                    headers,
+                    headers: withUserAgent(headers),
                 };
             },
         });

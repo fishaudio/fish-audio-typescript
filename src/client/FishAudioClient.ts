@@ -51,10 +51,9 @@ export class FishAudioClient {
         _options.apiKey = apiKey;
         this._options = {
             ..._options,
+            // User-Agent is added to every request and handshake by withUserAgent();
+            // a User-Agent in these headers is appended to it.
             headers: mergeHeaders(
-                {
-                    "User-Agent": "fish-audio",
-                },
                 typeof _options?.apiKey === "string" ? { Authorization: `Bearer ${_options.apiKey}` } : {},
                 _options?.headers,
             ),
