@@ -2,6 +2,7 @@ import WebSocket from "ws";
 import { encode, decode } from "@msgpack/msgpack";
 import { EventEmitter } from "node:events";
 import type { TTSRequest } from "../../api/resources/textToSpeech/requests/TTSRequest.js";
+import { omitUnsetLanguage } from "../../api/resources/textToSpeech/serialize.js";
 
 export class StartEvent {
     readonly event = "start";
@@ -14,7 +15,7 @@ export class StartEvent {
     toJSON() {
         return {
             event: this.event,
-            request: this.request,
+            request: omitUnsetLanguage(this.request),
         };
     }
 }
@@ -141,6 +142,16 @@ export class RealtimeConnection {
                     if (audio instanceof Uint8Array || Buffer.isBuffer(audio)) {
                         this.eventEmitter.emit(RealtimeEvents.AUDIO_CHUNK, audio);
                     }
+                    return;
+                }
+
+                if (eventType === "error") {
+                    // Sent when the API rejects the start event (for example an
+                    // invalid language tag). Nothing follows it, so close the
+                    // socket rather than leave the caller waiting for CLOSE.
+                    const message = (decoded as { error?: unknown }).error;
+                    this.eventEmitter.emit(RealtimeEvents.ERROR, new Error(typeof message === "string" ? message : "WebSocket error"));
+                    this.websocket?.close();
                     return;
                 }
 
