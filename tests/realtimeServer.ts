@@ -133,6 +133,9 @@ export async function startRealtimeServer(
             socket.end(
                 `HTTP/1.1 ${options.refuse.status} Refused\r\n` +
                     "Content-Type: application/json\r\n" +
+                    "x-fish-trace-id: trace-123\r\n" +
+                    "x-fish-error-code: invalid_api_key\r\n" +
+                    "Set-Cookie: a=1\r\nSet-Cookie: b=2\r\n" +
                     `Content-Length: ${Buffer.byteLength(body)}\r\n` +
                     "Connection: close\r\n\r\n" +
                     body,

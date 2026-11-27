@@ -349,6 +349,22 @@ fishAudio.user.get_api_credit()
 fishAudio.user.get_package()
 ```
 
+### Errors
+
+An HTTP request the API refuses throws a `FishAudioError` with `statusCode`, `body` and `rawResponse`. So does a refused realtime speech-to-text connection, thrown from the loop. A refused realtime text-to-speech connection does not yet: it emits a plain `Error` without them. When you contact support, include the trace id and the error code. Either can be absent.
+
+```ts
+import { FishAudioError } from "fish-audio";
+
+try {
+    await client.textToSpeech.convert({ text: "Hello" });
+} catch (err) {
+    if (err instanceof FishAudioError) {
+        console.error(err.rawResponse?.headers.get("x-fish-trace-id"), err.rawResponse?.headers.get("x-fish-error-code"));
+    }
+}
+```
+
 ## License
 
 This project is licensed under the Apache-2.0 License - see the [LICENSE](LICENSE) file for details.

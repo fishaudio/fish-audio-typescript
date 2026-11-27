@@ -3,6 +3,8 @@ import { decode, encode } from "@msgpack/msgpack";
 import type { ClientRequest, IncomingMessage } from "node:http";
 import { types } from "node:util";
 import * as apiErrors from "../../api/errors/index.js";
+import { Headers } from "../../core/fetcher/Headers.js";
+import type { RawResponse } from "../../core/fetcher/RawResponse.js";
 import { FishAudioError } from "../../errors/FishAudioError.js";
 import { RealtimeSTTError } from "../../errors/RealtimeSTTError.js";
 import type {
@@ -404,7 +406,7 @@ export class RealtimeSTTStream implements AsyncIterableIterator<RealtimeSTTEvent
                 void readRefusalBody(response).then(
                     this.#guarded((body: unknown) => {
                         request.destroy();
-                        this.#end(handshakeError(response.statusCode ?? 0, body));
+                        this.#end(handshakeError(params.url, response, body));
                     }),
                 );
             }),
@@ -745,21 +747,38 @@ function connectionError(prefix: string, cause: Error): RealtimeSTTError {
     return new RealtimeSTTError({ message: `${prefix}: ${cause.message}`, cause });
 }
 
-function handshakeError(statusCode: number, body: unknown): FishAudioError {
+/** The error for a WebSocket handshake the server answered with an HTTP error response. */
+function handshakeError(url: string, response: IncomingMessage, body: unknown): FishAudioError {
+    const headers = new Headers();
+    for (const [name, value] of Object.entries(response.headers)) {
+        for (const item of Array.isArray(value) ? value : value === undefined ? [] : [value]) {
+            headers.append(name, item);
+        }
+    }
+    const statusCode = response.statusCode ?? 0;
+    const rawResponse: RawResponse = {
+        headers,
+        redirected: false,
+        status: statusCode,
+        statusText: response.statusMessage ?? "",
+        type: "basic",
+        url,
+    };
     switch (statusCode) {
         case 400:
-            return new apiErrors.BadRequestError(body as apiErrors.BadRequestErrorBody);
+            return new apiErrors.BadRequestError(body as apiErrors.BadRequestErrorBody, rawResponse);
         case 401:
-            return new apiErrors.UnauthorizedError(body);
+            return new apiErrors.UnauthorizedError(body, rawResponse);
         case 403:
-            return new apiErrors.ForbiddenError(body);
+            return new apiErrors.ForbiddenError(body, rawResponse);
         case 404:
-            return new apiErrors.NotFoundError(body);
+            return new apiErrors.NotFoundError(body, rawResponse);
         default:
             return new FishAudioError({
                 message: "The realtime connection was refused.",
                 statusCode,
                 body,
+                rawResponse,
             });
     }
 }
