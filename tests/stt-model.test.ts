@@ -60,6 +60,14 @@ describe("speechToText.convert model", () => {
         expect(headerValues(requests[0]!, "model")).toEqual(["transcribe-1-pro"]);
     });
 
+    it("sends transcribe-2-pro as the model header", async () => {
+        const { client, requests } = await fakeAsr();
+
+        await client.speechToText.convert({ audio: audio(), model: "transcribe-2-pro" });
+
+        expect(headerValues(requests[0]!, "model")).toEqual(["transcribe-2-pro"]);
+    });
+
     it("keeps a model header from the request options when no model is given", async () => {
         const { client, requests } = await fakeAsr();
 
