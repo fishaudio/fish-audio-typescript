@@ -1,3 +1,4 @@
+import { removeHeader } from "../headers.js";
 import { toJson } from "../json.js";
 import { withUserAgent } from "../userAgent.js";
 import { APIResponse } from "./APIResponse.js";
@@ -68,14 +69,12 @@ async function getHeaders(args: Fetcher.Args): Promise<Record<string, string>> {
 
     for (const [key, value] of Object.entries(args.headers)) {
         const result = await EndpointSupplier.get(value, { endpointMetadata: args.endpointMetadata ?? {} });
-        if (typeof result === "string") {
-            newHeaders[key] = result;
-            continue;
-        }
         if (result == null) {
             continue;
         }
-        newHeaders[key] = `${result}`;
+        // In place of the body's Content-Type set above, whatever the case of the name.
+        removeHeader(newHeaders, key);
+        newHeaders[key] = typeof result === "string" ? result : `${result}`;
     }
     // Every HTTP request goes through here, also from a resource client built without FishAudioClient.
     return withUserAgent(newHeaders);

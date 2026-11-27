@@ -6,6 +6,7 @@ import * as environments from "../../environments.js";
 import { withUserAgent } from "../../core/userAgent.js";
 import { TTSRequest } from "../../api/resources/textToSpeech/requests/TTSRequest.js";
 import { Backends } from "../../api/resources/textToSpeech/Client.js";
+import { handshakeHeaders } from "./handshakeHeaders.js";
 
 /**
  * Text-to-Speech WebSocket client.
@@ -37,6 +38,8 @@ export class TextToSpeechWebSocket extends TextToSpeech {
      * Establishes a WebSocket connection for real-time text-to-speech.
      *
      * @param options - Configuration options for the connection
+     * @param requestOptions - `headers`: additional headers to include in the handshake.
+     * `Authorization` and `model` are always the SDK's own.
      * @returns A promise that resolves to a RealtimeConnection instance
      *
      * @remarks
@@ -55,6 +58,7 @@ export class TextToSpeechWebSocket extends TextToSpeech {
         request: TTSRequest,
         textStream: Iterable<string> | AsyncIterable<string>,
         backend: Backends = "s2.1-pro",
+        requestOptions: Pick<TextToSpeech.RequestOptions, "headers"> = {},
     ): Promise<RealtimeConnection> {
         let apiKey = this._options.apiKey;
         if (!apiKey) {
@@ -76,23 +80,14 @@ export class TextToSpeechWebSocket extends TextToSpeech {
         const connection = new RealtimeConnection();
 
         const uri = await this.getWebSocketUri();
-
-        // Only the client's User-Agent goes along: it is appended to the SDK's own.
-        const userAgents: Record<string, string> = {};
-        for (const [name, supplier] of Object.entries(this._options.headers ?? {})) {
-            if (name.toLowerCase() !== "user-agent") {
-                continue;
-            }
-            const value = await core.Supplier.get(supplier);
-            if (value != null) {
-                userAgents[name] = value;
-            }
-        }
-        const headers = withUserAgent({
-            ...userAgents,
-            Authorization: `Bearer ${apiKey as string}`,
-            model: backend,
-        });
+        // The client's and the call's headers go along; a User-Agent among
+        // them is appended to the SDK's own.
+        const headers = withUserAgent(
+            await handshakeHeaders(this._options.headers, requestOptions.headers, {
+                Authorization: `Bearer ${apiKey as string}`,
+                model: backend,
+            }),
+        );
 
         return new Promise((resolve) => {
             const websocket = new WebSocket(uri, { headers });

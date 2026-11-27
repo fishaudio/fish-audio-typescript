@@ -282,10 +282,10 @@ describe("User-Agent on the TTS WebSocket", () => {
         expect(headerValues(request, "model")).toEqual(["s2.1-pro"]);
     });
 
-    it("appends the client's User-Agent and sends no other client header", async () => {
+    it("appends the client's User-Agent and sends the client's other headers", async () => {
         const request = await handshake({ headers: { "user-agent": "my-app/1.0", "X-Other": "x" } });
         expect(headerValues(request, "user-agent")).toEqual([`${SDK_USER_AGENT} my-app/1.0`]);
-        expect(headerValues(request, "x-other")).toEqual([]);
+        expect(headerValues(request, "x-other")).toEqual(["x"]);
     });
 
     it("a refused handshake still carried it, and the error is emitted", async () => {

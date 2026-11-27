@@ -349,6 +349,28 @@ fishAudio.user.get_api_credit()
 fishAudio.user.get_package()
 ```
 
+## Tracing
+
+To continue your trace in the Fish Audio API, send a W3C `traceparent` header. Let exactly one thing add it to each request: with two `traceparent` headers the API starts a new trace.
+
+**With OpenTelemetry auto-instrumentation**, there is nothing to do. Register `@opentelemetry/instrumentation-undici` (HTTP requests, which use `fetch`) and `@opentelemetry/instrumentation-http` (the WebSocket handshakes) before your application's imports, for example with `node --import ./instrumentation.mjs`. Do not also set `traceparent` yourself.
+
+**Without it**, pass the header yourself. A function is called for each HTTP request and each WebSocket connection, so it can return the current trace:
+
+```typescript
+const fishAudio = new FishAudioClient({
+    headers: { traceparent: () => currentTraceparent() },
+});
+```
+
+Or per call; a per-call header replaces the client's header of the same name:
+
+```typescript
+await fishAudio.textToSpeech.convert(request, "s2.1-pro", { headers: { traceparent } });
+await fishAudio.textToSpeech.convertRealtime(request, textStream, "s2.1-pro", { headers: { traceparent } });
+fishAudio.speechToText.convertRealtime({}, audio, { headers: { traceparent } });
+```
+
 ## License
 
 This project is licensed under the Apache-2.0 License - see the [LICENSE](LICENSE) file for details.
