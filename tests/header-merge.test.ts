@@ -9,6 +9,7 @@ import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { FishAudioClient } from "../src/index.js";
 import { mergeHeaders } from "../src/core/headers.js";
+import { SDK_USER_AGENT } from "../src/core/userAgent.js";
 
 let server: Server;
 let baseUrl: string;
@@ -44,10 +45,10 @@ describe("a header named in two places, in different case", () => {
         },
     );
 
-    it("the client's headers replace the SDK's", async () => {
+    it("the client's User-Agent is sent once, after the SDK's", async () => {
         const client = new FishAudioClient({ apiKey: "key", baseUrl, headers: { "user-agent": "mine" } });
         await client.user.get_api_credit();
-        expect(last()["user-agent"]).toBe("mine");
+        expect(last()["user-agent"]).toBe(`${SDK_USER_AGENT} mine`);
     });
 
     it("a per-call header replaces the client's", async () => {

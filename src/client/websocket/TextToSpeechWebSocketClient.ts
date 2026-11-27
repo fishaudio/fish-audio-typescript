@@ -80,27 +80,14 @@ export class TextToSpeechWebSocket extends TextToSpeech {
         const connection = new RealtimeConnection();
 
         const uri = await this.getWebSocketUri();
-        const headers = await handshakeHeaders(this._options.headers, requestOptions.headers, {
-            Authorization: `Bearer ${apiKey as string}`,
-            model: backend,
-        });
-
-        // Only the client's User-Agent goes along: it is appended to the SDK's own.
-        const userAgents: Record<string, string> = {};
-        for (const [name, supplier] of Object.entries(this._options.headers ?? {})) {
-            if (name.toLowerCase() !== "user-agent") {
-                continue;
-            }
-            const value = await core.Supplier.get(supplier);
-            if (value != null) {
-                userAgents[name] = value;
-            }
-        }
-        const headers = withUserAgent({
-            ...userAgents,
-            Authorization: `Bearer ${apiKey as string}`,
-            model: backend,
-        });
+        // The client's and the call's headers go along; a User-Agent among
+        // them is appended to the SDK's own.
+        const headers = withUserAgent(
+            await handshakeHeaders(this._options.headers, requestOptions.headers, {
+                Authorization: `Bearer ${apiKey as string}`,
+                model: backend,
+            }),
+        );
 
         return new Promise((resolve) => {
             const websocket = new WebSocket(uri, { headers });
